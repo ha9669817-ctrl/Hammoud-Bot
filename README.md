@@ -1,2 +1,0 @@
-# Hammoud-Bot
-Hamoud Bot
