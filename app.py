@@ -1313,6 +1313,39 @@ def index():
     return Response(INDEX_HTML, mimetype="text/html")
 
 
+MARKET_CACHE = {"at": 0.0, "data": None}
+
+
+def live_market(force: bool = False) -> dict:
+    """Live 1-minute prices from Binance public data (PAXG as gold proxy). Cached 8 seconds."""
+    now = time.time()
+    if not force and MARKET_CACHE["data"] is not None and now - MARKET_CACHE["at"] < 8:
+        return MARKET_CACHE["data"]
+    out = {}
+    for asset, info in ASSETS.items():
+        try:
+            r = requests.get(BINANCE_URL, params={"symbol": info["symbol"], "interval": "1m", "limit": 180},
+                             timeout=TIMEOUT)
+            r.raise_for_status()
+            rows = r.json()
+            closes = [float(x[4]) for x in rows]
+            times = [int(x[0]) for x in rows]
+            last, first = closes[-1], closes[0]
+            out[asset] = {"label": info["label"], "price": last, "change_pct": round((last / first - 1) * 100, 3),
+                          "closes": closes, "times": times, "updated": int(now)}
+        except Exception as exc:
+            out[asset] = {"label": info["label"], "error": f"تعذّر جلب السعر: {type(exc).__name__}",
+                          "updated": int(now)}
+    MARKET_CACHE.update(at=now, data=out)
+    return out
+
+
+@app.get("/api/market")
+def market():
+    return jsonify({"assets": live_market(force=request.args.get("force") == "1"),
+                    "source": "Binance (PAXG كبديل للذهب)", "now": int(time.time())})
+
+
 @app.get("/api/state")
 def state():
     return jsonify(_build_state())
@@ -1506,309 +1539,397 @@ INDEX_HTML = r'''
 <title>مركز التحليل الذاتي</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
-<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg: #05070b;
-    --panel: rgba(14, 19, 29, .62);
-    --line: rgba(255, 255, 255, .07);
-    --text: #e6ebf3;
-    --muted: #7c8799;
-    --gold: #f5c451;
-    --emerald: #34d399;
-    --rose: #fb7185;
-    --sky: #38bdf8;
+    --bg: #04060a;
+    --bg2: #070b12;
+    --surface: #0b1019;
+    --surface2: #0f1620;
+    --line: rgba(148, 163, 184, .10);
+    --line2: rgba(148, 163, 184, .18);
+    --text: #e8edf5;
+    --muted: #6b7789;
+    --gold: #e7b75a;
+    --up: #2fd3a0;
+    --down: #f4637a;
+    --info: #4aa8ff;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
   }
-  html, body { background: var(--bg); }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; background: var(--bg); }
   body {
+    margin: 0;
     font-family: "IBM Plex Sans Arabic", "Segoe UI", system-ui, sans-serif;
     color: var(--text);
-    background-image:
-      radial-gradient(900px 500px at 85% -10%, rgba(52, 211, 153, .10), transparent 60%),
-      radial-gradient(800px 480px at 0% 0%, rgba(245, 196, 81, .08), transparent 55%),
-      linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
-    background-size: auto, auto, 44px 44px, 44px 44px;
-    background-attachment: fixed;
+    font-size: 14px;
     -webkit-font-smoothing: antialiased;
   }
-  .num { font-family: "JetBrains Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-  .glass {
-    background: linear-gradient(180deg, rgba(20, 27, 40, .72), rgba(8, 11, 18, .72));
-    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
-    border: 1px solid var(--line); border-radius: 22px;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 30px 60px -30px rgba(0,0,0,.8);
-  }
-  .ring-gold    { box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 0 0 1px rgba(245,196,81,.18), 0 20px 50px -20px rgba(245,196,81,.25); }
-  .ring-emerald { box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 0 0 1px rgba(52,211,153,.18), 0 20px 50px -20px rgba(52,211,153,.25); }
-  .ring-rose    { box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 0 0 1px rgba(251,113,133,.18), 0 20px 50px -20px rgba(251,113,133,.25); }
-  .ring-sky     { box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 0 0 1px rgba(56,189,248,.16), 0 20px 50px -20px rgba(56,189,248,.22); }
-  .eyebrow { font-size: 11px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
-  .title-grad { background: linear-gradient(95deg, #fff 0%, var(--gold) 55%, var(--emerald) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .up { color: var(--up); }
+  .down { color: var(--down); }
+  .info { color: var(--info); }
+  .gold { color: var(--gold); }
 
-  .pulse { width: 8px; height: 8px; border-radius: 999px; background: var(--emerald); box-shadow: 0 0 0 0 rgba(52,211,153,.6); animation: ping 2s infinite; }
-  .pulse.off { background: #475569; animation: none; box-shadow: none; }
-  @keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(52,211,153,.55); } 70% { box-shadow: 0 0 0 10px rgba(52,211,153,0); } 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); } }
+  /* layout */
+  .app { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; overflow-x: hidden; }
+  .side { position: sticky; top: 0; height: 100vh; border-left: 1px solid var(--line); background: var(--bg2); padding: 18px 14px; display: flex; flex-direction: column; gap: 22px; }
+  .main { min-width: 0; display: flex; flex-direction: column; }
+  .topbar { position: sticky; top: 0; z-index: 10; background: rgba(4,6,10,.85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); padding: 12px 22px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; justify-content: space-between; }
+  .content { padding: 20px 22px 40px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+  .panel-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px 0; }
+  .panel-b { padding: 14px 16px 16px; }
+  .eyebrow { font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+  .title { font-size: 15px; font-weight: 600; }
+  .grid-main { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 320px); min-width: 0; }
+  .grid-2 { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-prices { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-kpi { display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .stack { display: grid; gap: 16px; align-content: start; min-width: 0; }
+  .panel, .glass { min-width: 0; }
 
-  .btn { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; border-radius: 14px; padding: .55rem 1rem; font-size: .85rem; font-weight: 600; color: var(--text); background: rgba(255,255,255,.04); border: 1px solid var(--line); transition: all .18s ease; white-space: nowrap; }
-  .btn:hover { background: rgba(255,255,255,.09); transform: translateY(-1px); }
-  .btn:active { transform: translateY(0); }
-  .btn-primary { color: #05070b; background: linear-gradient(120deg, var(--gold), #fb923c 45%, var(--emerald)); border: none; box-shadow: 0 10px 30px -10px rgba(245,196,81,.55); }
-  .btn-primary:hover { filter: brightness(1.07); background: linear-gradient(120deg, var(--gold), #fb923c 45%, var(--emerald)); }
-  .btn-danger { color: #fecdd3; background: rgba(244,63,94,.10); border-color: rgba(251,113,133,.25); }
-  .btn-danger:hover { background: rgba(244,63,94,.18); }
+  /* nav */
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .logo { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, var(--gold), var(--up)); color: #04060a; font-weight: 700; display: grid; place-items: center; font-size: 13px; }
+  .nav a { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-radius: 10px; color: var(--muted); cursor: pointer; font-weight: 500; border: 1px solid transparent; }
+  .nav a:hover { color: var(--text); background: rgba(255,255,255,.03); }
+  .nav a.on { color: var(--text); background: var(--surface2); border-color: var(--line2); }
+  .nav-count { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 
-  .inp { width: 100%; background: rgba(3,5,9,.7); border: 1px solid var(--line); border-radius: 14px; padding: .6rem .8rem; font-size: .88rem; color: var(--text); outline: none; transition: border-color .18s, box-shadow .18s; }
-  .inp::placeholder { color: #4b5563; }
-  .inp:focus { border-color: rgba(245,196,81,.55); box-shadow: 0 0 0 4px rgba(245,196,81,.10); }
-  .inp.bad { border-color: rgba(251,113,133,.8); box-shadow: 0 0 0 4px rgba(251,113,133,.12); }
-  .label { display: block; font-size: .75rem; color: var(--muted); margin-bottom: .35rem; }
+  /* controls */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--line2); background: var(--surface2); color: var(--text); font: inherit; font-weight: 600; font-size: 13px; cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s; }
+  .btn:hover { background: #151e2b; border-color: rgba(148,163,184,.3); }
+  .btn-primary { background: var(--gold); color: #0a0c10; border-color: transparent; }
+  .btn-primary:hover { background: #f0c46c; }
+  .btn-danger { color: #ffb3c0; background: rgba(244,99,122,.08); border-color: rgba(244,99,122,.25); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .inp { width: 100%; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line2); background: #060a10; color: var(--text); font: inherit; font-size: 13px; outline: none; }
+  .inp:focus { border-color: rgba(231,183,90,.55); }
+  .inp.bad { border-color: var(--down); }
+  .label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .seg { display: inline-flex; padding: 3px; gap: 3px; background: #060a10; border: 1px solid var(--line); border-radius: 11px; }
+  .seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+  .seg button.on { background: var(--surface2); color: var(--text); box-shadow: inset 0 0 0 1px var(--line2); }
 
-  .seg { display: inline-flex; gap: 4px; padding: 4px; border-radius: 16px; background: rgba(3,5,9,.7); border: 1px solid var(--line); overflow-x: auto; max-width: 100%; }
-  .seg-btn { padding: .5rem 1.1rem; border-radius: 12px; font-size: .86rem; font-weight: 600; color: var(--muted); white-space: nowrap; transition: all .18s; }
-  .seg-btn:hover { color: var(--text); }
-  .seg-btn.active { color: #05070b; background: linear-gradient(120deg, var(--gold), var(--emerald)); box-shadow: 0 8px 20px -8px rgba(245,196,81,.6); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line2); color: var(--muted); white-space: nowrap; }
+  .pill:empty { display: none; }
+  .pill.up { color: var(--up); border-color: rgba(47,211,160,.3); background: rgba(47,211,160,.06); }
+  .pill.down { color: var(--down); border-color: rgba(244,99,122,.3); background: rgba(244,99,122,.06); }
+  .pill.gold { color: var(--gold); border-color: rgba(231,183,90,.3); background: rgba(231,183,90,.06); }
+  .pill.info { color: var(--info); border-color: rgba(74,168,255,.3); background: rgba(74,168,255,.06); }
+  .dot { width: 7px; height: 7px; border-radius: 999px; background: var(--muted); flex: none; }
+  .dot.up { background: var(--up); box-shadow: 0 0 8px var(--up); }
+  .dot.down { background: var(--down); }
+  .dot.live { background: var(--up); animation: blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .35; } }
 
-  .badge { display: inline-flex; align-items: center; gap: .35rem; font-size: .72rem; font-weight: 600; border-radius: 999px; padding: .2rem .65rem; border: 1px solid var(--line); background: rgba(255,255,255,.03); color: var(--muted); white-space: nowrap; }
-  .b-up { color: var(--emerald); border-color: rgba(52,211,153,.35); background: rgba(52,211,153,.08); }
-  .b-down { color: var(--rose); border-color: rgba(251,113,133,.35); background: rgba(251,113,133,.08); }
-  .b-gold { color: var(--gold); border-color: rgba(245,196,81,.35); background: rgba(245,196,81,.08); }
-  .b-sky { color: var(--sky); border-color: rgba(56,189,248,.35); background: rgba(56,189,248,.08); }
+  /* price cards */
+  .pcard { padding: 16px; cursor: pointer; transition: border-color .15s; }
+  .pcard:hover { border-color: var(--line2); }
+  .pcard.sel { border-color: rgba(231,183,90,.4); }
+  .pval { font-family: var(--mono); font-size: 26px; font-weight: 500; letter-spacing: -.02em; margin-top: 6px; }
+  .pchg { font-family: var(--mono); font-size: 13px; }
 
-  .bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.06); overflow: hidden; }
-  .bar > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--emerald), var(--sky)); transition: width .6s ease; }
+  /* kpi */
+  .kpi { padding: 14px 16px; }
+  .kval { font-family: var(--mono); font-size: 22px; font-weight: 500; margin-top: 4px; }
+  .kval small { font-size: 12px; color: var(--muted); }
+  .bar { height: 4px; border-radius: 4px; background: rgba(148,163,184,.12); overflow: hidden; margin-top: 10px; }
+  .bar > span { display: block; height: 100%; background: var(--up); border-radius: 4px; transition: width .5s; }
 
-  .tbl { width: 100%; border-collapse: separate; border-spacing: 0; }
-  .tbl th { color: var(--muted); font-weight: 500; font-size: .74rem; padding: .6rem .6rem; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  .tbl td { padding: .7rem .6rem; font-size: .84rem; border-bottom: 1px solid rgba(255,255,255,.04); white-space: nowrap; }
-  .tbl tr:hover td { background: rgba(255,255,255,.02); }
+  /* tables */
+  .tbl { width: 100%; border-collapse: collapse; }
+  .tbl th { text-align: right; font-weight: 500; font-size: 12px; color: var(--muted); padding: 9px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .tbl td { padding: 10px; border-bottom: 1px solid rgba(148,163,184,.06); font-size: 13px; white-space: nowrap; }
+  .tbl tbody tr:hover td { background: rgba(255,255,255,.015); }
+  .tbl .mono { font-family: var(--mono); }
+  .scroll { overflow-x: auto; }
+  .empty { padding: 26px; text-align: center; color: var(--muted); font-size: 13px; }
 
-  .up { color: var(--emerald); }
-  .down { color: var(--rose); }
-  .flat { color: #cbd5e1; }
-  .card-title { font-weight: 700; font-size: 1rem; }
-  details > summary { list-style: none; }
-  details > summary::-webkit-details-marker { display: none; }
-  .fade-in { animation: fade .45s ease both; }
-  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-  .radar { position: relative; width: 56px; height: 56px; flex: none; }
-  .radar i { position: absolute; inset: 0; border-radius: 999px; border: 1px solid rgba(52,211,153,.5); opacity: 0; }
-  .radar b { position: absolute; inset: 38%; border-radius: 999px; background: #475569; }
-  .radar.on b { background: #34d399; box-shadow: 0 0 14px #34d399; }
+  /* engine radar */
+  .radar { position: relative; width: 52px; height: 52px; flex: none; }
+  .radar i { position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(47,211,160,.55); opacity: 0; }
+  .radar b { position: absolute; inset: 37%; border-radius: 50%; background: #3b4657; }
+  .radar.on b { background: var(--up); box-shadow: 0 0 12px var(--up); }
   .radar.on i { animation: ripple 1.8s ease-out infinite; }
   .radar.on i:nth-child(2) { animation-delay: .6s; }
   .radar.on i:nth-child(3) { animation-delay: 1.2s; }
   @keyframes ripple { 0% { transform: scale(.35); opacity: .9; } 100% { transform: scale(1.5); opacity: 0; } }
-  ::-webkit-scrollbar { width: 8px; height: 8px; }
-  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 8px; }
-  ::-webkit-scrollbar-track { background: transparent; }
+  .feed li { display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px; border-radius: 10px; background: #070b12; border: 1px solid var(--line); font-size: 13px; }
+  .feed .tag { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: var(--surface2); color: var(--muted); white-space: nowrap; }
+  .feed .tag.open { color: var(--up); } .feed .tag.close { color: var(--gold); }
+  .feed .tag.warn, .feed .tag.error { color: var(--down); } .feed .tag.evolve, .feed .tag.scan { color: var(--info); }
+
+  /* brokers */
+  .modes { display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .mode { display: block; padding: 14px; border-radius: 12px; border: 1px solid var(--line2); background: #070b12; cursor: pointer; }
+  .mode.dis { opacity: .4; cursor: not-allowed; }
+  .mode.sel { border-color: rgba(231,183,90,.5); }
+  .mode .n { font-weight: 600; font-size: 13px; }
+  .mode .d { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
+  .form { display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  details summary { cursor: pointer; list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  pre.out { margin: 0; white-space: pre-wrap; font-family: var(--mono); font-size: 12px; color: #b8c2d1; background: #060a10; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-height: 44px; }
+
+  .chart-box { position: relative; height: 300px; }
+  .foot { font-size: 11px; color: var(--muted); line-height: 1.7; padding: 4px 4px 0; }
+  .mob-nav { display: none; }
+  .hidden { display: none !important; }
+  canvas { max-width: 100%; }
+  .content > * { width: 100%; min-width: 0; }
+  .chart-box { width: 100%; min-width: 0; }
+  .main, .topbar { min-width: 0; max-width: 100%; }
+
+  @media (max-width: 1100px) {
+    .grid-main { grid-template-columns: minmax(0, 1fr); }
+    .grid-kpi { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 860px) {
+    .app { grid-template-columns: minmax(0, 1fr); }
+    .side { display: none; }
+    .grid-2, .grid-prices, .form, .modes, .grid-main { grid-template-columns: minmax(0, 1fr); }
+    .content { padding: 14px 14px 96px; }
+    .topbar { padding: 10px 14px; }
+    .mob-nav { display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 20; background: rgba(7,11,18,.96); border-top: 1px solid var(--line); justify-content: space-around; padding: 8px 6px calc(8px + env(safe-area-inset-bottom)); }
+    .mob-nav button { flex: 1; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; padding: 6px; border-radius: 8px; cursor: pointer; }
+    .mob-nav button.on { color: var(--text); background: var(--surface2); }
+  }
 </style>
 </head>
-<body class="min-h-screen">
+<body>
+<div class="app">
 
-<div class="max-w-7xl mx-auto px-3 md:px-6 pb-10">
-
-  <!-- ============ Top bar ============ -->
-  <header class="sticky top-0 z-20 -mx-3 md:-mx-6 px-3 md:px-6 pt-3 pb-3 backdrop-blur-xl bg-[#05070b]/70 border-b border-white/5">
-    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-      <div class="flex items-center gap-3">
-        <div class="w-11 h-11 rounded-2xl flex items-center justify-center text-lg font-bold text-[#05070b]" style="background:linear-gradient(135deg,#f5c451,#34d399);box-shadow:0 10px 30px -8px rgba(245,196,81,.5)">MA</div>
-        <div>
-          <h1 class="title-grad text-lg md:text-xl font-extrabold leading-tight">مركز التحليل الذاتي</h1>
-          <p class="flex items-center gap-2 text-[12px] text-[var(--muted)] mt-0.5">
-            <span id="liveDot" class="pulse"></span><span id="liveText">جارٍ الاتصال...</span>
-          </p>
-        </div>
+  <!-- ============ Sidebar ============ -->
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">MA</div>
+      <div>
+        <div style="font-weight:700">مركز التحليل</div>
+        <div class="eyebrow">Self-improving engine</div>
       </div>
-      <div class="flex flex-col sm:flex-row gap-2">
-        <input id="pw" type="password" placeholder="كلمة مرور الإدارة" autocomplete="current-password" class="inp sm:w-48">
-        <select id="scope" class="inp sm:w-44">
+    </div>
+    <nav class="nav stack" style="gap:4px">
+      <a data-view="terminal" class="on"><span>الرئيسية</span><span class="nav-count" id="navAlerts"></span></a>
+      <a data-view="engine"><span>المحرك</span><span class="nav-count" id="navCycles"></span></a>
+      <a data-view="brokers"><span>الوسطاء والربط</span></a>
+      <a data-view="research"><span>البحث والسجل</span></a>
+    </nav>
+    <div style="margin-top:auto" class="foot">
+      نظام تعليمي يعمل بتنفيذ ورقي أو على حسابات تجريبية فقط. الوضع الحقيقي غير مفعّل. نتائج الاختبار التاريخي لا تضمن أرباحاً مستقبلية.
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- ============ Top bar ============ -->
+    <header class="topbar">
+      <div class="flex items-center gap-3" style="display:flex;align-items:center;gap:10px">
+        <span id="liveDot" class="dot"></span>
+        <span id="liveText" class="muted" style="font-size:13px">جارٍ الاتصال...</span>
+        <span id="engPill" class="pill">المحرك: —</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <input id="pw" type="password" placeholder="كلمة مرور الإدارة" autocomplete="current-password" class="inp" style="width:190px">
+        <select id="scope" class="inp" style="width:170px">
           <option value="all">الذهب + البيتكوين</option>
           <option value="XAUUSD">الذهب فقط</option>
           <option value="BTCUSDT">البيتكوين فقط</option>
         </select>
-        <div class="flex gap-2">
-          <button id="btnScope" class="btn">حفظ الأصول</button>
-          <button id="btnRun" class="btn">فحص</button>
-          <button id="btnEvolve" class="btn btn-primary">تطوير</button>
-        </div>
+        <button id="btnScope" class="btn">حفظ الأصول</button>
+        <button id="btnRun" class="btn">فحص الآن</button>
+        <button id="btnEvolve" class="btn btn-primary">تطوير</button>
       </div>
-    </div>
-    <p id="msg" class="text-xs text-amber-200 min-h-[1rem] mt-2 px-1"></p>
-  </header>
+    </header>
+    <p id="msg" class="info" style="margin:0;padding:6px 22px;font-size:12px;min-height:18px"></p>
 
-  <!-- ============ Tabs ============ -->
-  <nav class="mt-4 mb-5">
-    <div class="seg">
-      <button class="seg-btn active" data-tab="overview">الرئيسية</button>
-      <button class="seg-btn" data-tab="brokers">الوسطاء والإعدادات</button>
-      <button class="seg-btn" data-tab="research">التطوير والسجل</button>
-    </div>
-  </nav>
+    <!-- mobile nav -->
+    <nav class="mob-nav">
+      <button data-view="terminal" class="on">الرئيسية</button>
+      <button data-view="engine">المحرك</button>
+      <button data-view="brokers">الربط</button>
+      <button data-view="research">السجل</button>
+    </nav>
 
-  <!-- ============ Tab: overview ============ -->
-  <section data-pane="overview" class="space-y-5 fade-in">
-    <div class="glass ring-emerald p-5 md:p-6">
-      <div class="flex flex-col md:flex-row md:items-center gap-5 md:justify-between">
-        <div class="flex items-center gap-4">
-          <div id="radar" class="radar"><i></i><i></i><i></i><b></b></div>
-          <div>
-            <div class="eyebrow">محرك التداول الآلي · قواعد تحليل + بحث تطوري بوابات تحقق</div>
-            <div id="engMsg" class="text-lg font-bold mt-1">بانتظار أول فحص</div>
-            <div class="text-xs text-[var(--muted)] mt-1"><span id="engLast"></span> · <span id="engNext" class="num"></span></div>
+    <div class="content">
+
+      <!-- ============ View: terminal ============ -->
+      <section data-pane="terminal" class="stack">
+        <div id="priceCards" class="grid-prices"></div>
+
+        <div class="grid-main">
+          <div class="panel">
+            <div class="panel-h">
+              <div>
+                <div class="title">السعر الحي</div>
+                <div class="eyebrow" id="chartMeta">تحديث كل 10 ثوانٍ من Binance</div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <div class="seg" id="chartTabs">
+                  <button data-asset="XAUUSD" class="on">الذهب</button>
+                  <button data-asset="BTCUSDT">البيتكوين</button>
+                </div>
+                <button id="btnMarket" class="btn" style="padding:6px 10px">تحديث الآن</button>
+              </div>
+            </div>
+            <div class="panel-b"><div class="chart-box"><canvas id="priceChart"></canvas></div></div>
+          </div>
+
+          <div class="stack">
+            <div class="panel">
+              <div class="panel-b" style="padding-bottom:6px">
+                <div class="eyebrow">رصيد الحساب</div>
+                <div id="acctBalance" class="mono" style="font-size:30px;margin-top:6px">—</div>
+                <div id="acctSub" class="muted" style="font-size:12px;margin-top:4px"></div>
+              </div>
+              <div class="panel-b" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;border-top:1px solid var(--line)">
+                <div><div class="eyebrow">العائد</div><div id="acctReturn" class="mono" style="font-size:16px;margin-top:4px">—</div></div>
+                <div><div class="eyebrow">نجاح</div><div id="acctWin" class="mono" style="font-size:16px;margin-top:4px">—</div></div>
+                <div><div class="eyebrow">معامل الربح</div><div id="acctPF" class="mono" style="font-size:16px;margin-top:4px">—</div></div>
+                <div><div class="eyebrow">صفقات مغلقة</div><div id="acctTrades" class="mono" style="font-size:16px;margin-top:4px">—</div></div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-h"><div class="title">الاستراتيجية المعتمدة</div></div>
+              <div id="champBlock" class="panel-b" style="display:grid;gap:10px"></div>
+            </div>
           </div>
         </div>
-        <div class="flex gap-8">
-          <div><div class="eyebrow">الفحوصات</div><div id="engCycles" class="num text-xl font-bold mt-1">0</div></div>
-          <div><div class="eyebrow">الوضع</div><div id="engMode" class="text-sm font-semibold mt-2">—</div></div>
+
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-h">
+              <div class="title">الصفقات المفتوحة</div>
+              <span id="openCount" class="pill">0</span>
+            </div>
+            <div class="panel-b scroll"><table class="tbl">
+              <thead><tr><th>الأصل</th><th>الاتجاه</th><th>الدخول</th><th>الوقف</th><th>الهدف</th><th>الوضع</th></tr></thead>
+              <tbody id="openRows"></tbody>
+            </table></div>
+            <div id="unmanagedBox" class="panel-b hidden" style="border-top:1px solid var(--line)">
+              <div class="eyebrow gold" style="margin-bottom:8px">مراكز على المنصة غير مُدارة من النظام</div>
+              <div class="scroll"><table class="tbl">
+                <thead><tr><th>الرمز</th><th>الاتجاه</th><th>الحجم</th><th>الربح</th><th>الوقف</th><th>الهدف</th></tr></thead>
+                <tbody id="unmanagedRows"></tbody>
+              </table></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><div class="title">الصفقات المغلقة</div><span class="eyebrow">آخر 60</span></div>
+            <div class="panel-b scroll" style="max-height:340px;overflow-y:auto"><table class="tbl">
+              <thead style="position:sticky;top:0;background:var(--surface)"><tr><th>الأصل</th><th>الاتجاه</th><th>R</th><th>الربح</th><th>الإغلاق</th></tr></thead>
+              <tbody id="closedRows"></tbody>
+            </table></div>
+          </div>
         </div>
-      </div>
-      <div class="mt-5 border-t border-white/5 pt-4">
-        <div class="eyebrow mb-2">سجل النشاط الحي</div>
-        <ul id="engFeed" class="space-y-2 max-h-72 overflow-y-auto"></ul>
-      </div>
-    </div>
 
-    <div id="kpis" class="grid grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4"></div>
-
-    <div class="glass ring-emerald p-5">
-      <div class="flex items-center justify-between mb-3">
-        <div>
-          <h2 class="card-title">منحنى الرصيد</h2>
-          <p class="text-xs text-[var(--muted)]">الرصيد بعد كل صفقة مغلقة</p>
+        <div class="panel">
+          <div class="panel-h"><div><div class="title">منحنى الرصيد</div><div class="eyebrow">الرصيد بعد كل صفقة مغلقة</div></div><span id="equityMeta" class="pill"></span></div>
+          <div class="panel-b"><div class="chart-box" style="height:220px"><canvas id="equityChart"></canvas></div>
+            <p id="equityEmpty" class="empty hidden">لا توجد صفقات مغلقة بعد.</p></div>
         </div>
-        <span id="equityMeta" class="badge"></span>
-      </div>
-      <div class="relative h-64 md:h-72"><canvas id="equity"></canvas></div>
-      <p id="equityEmpty" class="text-[var(--muted)] text-sm text-center py-10 hidden">لا توجد صفقات مغلقة بعد.</p>
-    </div>
+      </section>
 
-    <div>
-      <h2 class="eyebrow mb-3 px-1">الأصول</h2>
-      <div id="assets" class="grid gap-4 lg:grid-cols-2"></div>
-    </div>
-
-    <div class="grid gap-4 xl:grid-cols-2">
-      <div class="glass ring-sky p-5">
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="card-title">الصفقات المفتوحة</h2>
-          <span id="openCount" class="badge b-sky">0</span>
+      <!-- ============ View: engine ============ -->
+      <section data-pane="engine" class="hidden stack">
+        <div class="panel" style="padding:20px">
+          <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:center;justify-content:space-between">
+            <div style="display:flex;gap:16px;align-items:center">
+              <div id="radar" class="radar"><i></i><i></i><i></i><b></b></div>
+              <div>
+                <div class="eyebrow">محرك التداول · قواعد تحليل وبحث تطوري وبوابات تحقق (بدون نموذج لغوي)</div>
+                <div id="engMsg" style="font-size:17px;font-weight:600;margin-top:6px">—</div>
+                <div class="muted" style="font-size:12px;margin-top:4px"><span id="engLast"></span> · <span id="engNext" class="mono"></span></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:26px">
+              <div><div class="eyebrow">الفحوصات</div><div id="engCycles" class="mono" style="font-size:20px;margin-top:4px">0</div></div>
+              <div><div class="eyebrow">الوضع</div><div id="engMode" style="font-weight:600;margin-top:6px">—</div></div>
+              <div><button id="engBtnRun" class="btn btn-primary">فحص الآن</button></div>
+            </div>
+          </div>
         </div>
-        <div class="overflow-x-auto"><table class="tbl">
-          <thead><tr><th>الأصل</th><th>الاتجاه</th><th>الدخول</th><th>الوقف</th><th>الهدف</th><th>الوضع</th></tr></thead>
-          <tbody id="openRows"></tbody>
-        </table></div>
-        <div id="unmanagedBox" class="mt-5 hidden">
-          <div class="text-xs font-semibold text-amber-300 mb-2">مراكز على المنصة غير مُدارة من النظام</div>
-          <div class="overflow-x-auto"><table class="tbl">
-            <thead><tr><th>الرمز</th><th>الاتجاه</th><th>الحجم</th><th>الربح</th><th>الوقف</th><th>الهدف</th></tr></thead>
-            <tbody id="unmanagedRows"></tbody>
+        <div class="panel">
+          <div class="panel-h"><div class="title">سجل النشاط الحي</div><span class="eyebrow">آخر 40 حدثاً</span></div>
+          <div class="panel-b"><ul id="engFeed" class="feed stack" style="gap:8px;max-height:520px;overflow-y:auto"></ul></div>
+        </div>
+      </section>
+
+      <!-- ============ View: brokers ============ -->
+      <section data-pane="brokers" class="hidden stack">
+        <div class="panel">
+          <div class="panel-h"><div><div class="title">وضع التنفيذ</div><div class="eyebrow">اختر الوضع ثم اضغط تطبيق. الوضع الحقيقي غير مفعّل في هذه النسخة.</div></div></div>
+          <div class="panel-b" style="display:grid;gap:14px">
+            <div id="modes" class="modes"></div>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+              <button id="btnSetMode" class="btn btn-primary">تطبيق الوضع المختار</button>
+              <span id="modeOut" class="muted" style="font-size:12px"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h">
+            <div><div class="title">TickerAll · MT5 تجريبي (Exness)</div><div class="eyebrow">الوقف والهدف يُحملان على جهة الوسيط. الحسابات الحقيقية مرفوضة.</div></div>
+            <span id="taBadge" class="pill">غير مرتبط</span>
+          </div>
+          <div class="panel-b" style="display:grid;gap:16px">
+            <div class="form">
+              <label><span class="label">API Key</span><input id="taKey" type="text" autocomplete="off" spellcheck="false" class="inp" placeholder="cf_api_…"></label>
+              <label><span class="label">رقم الحساب التجريبي</span><input id="taLogin" type="text" inputmode="numeric" autocomplete="off" class="inp"></label>
+              <label><span class="label">السيرفر</span><input id="taServer" type="text" autocomplete="off" class="inp" placeholder="Exness-MT5Trial16"></label>
+              <label><span class="label">كلمة مرور الحساب التجريبي</span><input id="taPass" type="password" autocomplete="new-password" class="inp"></label>
+              <label><span class="label">رمز الذهب لدى الوسيط</span><input id="taSymGold" type="text" class="inp" value="XAUUSD"></label>
+              <label><span class="label">رمز البيتكوين لدى الوسيط</span><input id="taSymBtc" type="text" class="inp" value="BTCUSD"></label>
+            </div>
+            <div class="eyebrow">الحقول أعلاه لحساب المنصة. كلمة مرور الإدارة في أعلى الصفحة حقل منفصل يحمي الحفظ.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button id="btnSaveTa" class="btn btn-primary">حفظ</button>
+              <button id="btnTestTa" class="btn">اتصال واختبار الرموز</button>
+              <button id="btnClearTa" class="btn btn-danger">حذف</button>
+            </div>
+            <pre id="taOut" class="out"></pre>
+          </div>
+        </div>
+
+        <details class="panel" style="padding:16px">
+          <summary style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+            <span class="title">Binance Testnet <span class="muted" style="font-weight:400;font-size:12px">· للبيتكوين، أموال وهمية</span></span>
+            <span id="keyStatus" class="muted" style="font-size:12px"></span>
+          </summary>
+          <div class="form" style="margin-top:16px;grid-template-columns:repeat(4,minmax(0,1fr))">
+            <label><span class="label">نوع السوق</span><select id="market" class="inp"></select></label>
+            <label><span class="label">API Key</span><input id="apiKey" type="text" autocomplete="off" spellcheck="false" class="inp"></label>
+            <label><span class="label">API Secret</span><input id="apiSecret" type="password" autocomplete="off" class="inp"></label>
+            <div style="display:flex;gap:8px;align-items:flex-end">
+              <button id="btnSaveKeys" class="btn btn-primary" style="flex:1">حفظ</button>
+              <button id="btnTest" class="btn" style="flex:1">اختبار</button>
+              <button id="btnClearKeys" class="btn btn-danger">حذف</button>
+            </div>
+          </div>
+          <p id="testOut" class="muted" style="font-size:12px;margin:12px 0 0"></p>
+        </details>
+      </section>
+
+      <!-- ============ View: research ============ -->
+      <section data-pane="research" class="hidden grid-main" style="grid-template-columns:minmax(0,1fr) minmax(0,340px)">
+        <div class="panel">
+          <div class="panel-h"><div class="title">لوحة المتصدرين</div><span class="eyebrow">استراتيجيات اجتازت أو لم تجتز</span></div>
+          <div class="panel-b scroll"><table class="tbl">
+            <thead><tr><th>الأصل</th><th>الاستراتيجية</th><th>نجاح%</th><th>PF</th><th>تراجع R</th><th>الدرجة</th></tr></thead>
+            <tbody id="boardRows"></tbody>
           </table></div>
         </div>
-      </div>
-      <div class="glass p-5">
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="card-title">الصفقات المغلقة</h2>
-          <span class="badge">آخر 60</span>
+        <div class="panel">
+          <div class="panel-h"><div class="title">سجل التطوير</div></div>
+          <div class="panel-b"><ul id="evoLog" class="stack" style="gap:8px;max-height:520px;overflow-y:auto"></ul></div>
         </div>
-        <div class="overflow-auto max-h-96"><table class="tbl">
-          <thead class="sticky top-0 bg-[#0a0e16]"><tr><th>الأصل</th><th>الاتجاه</th><th>R</th><th>الربح</th><th>الإغلاق</th></tr></thead>
-          <tbody id="closedRows"></tbody>
-        </table></div>
-      </div>
+      </section>
+
     </div>
-  </section>
-
-  <!-- ============ Tab: brokers ============ -->
-  <section data-pane="brokers" class="hidden space-y-5 fade-in">
-
-    <div class="glass p-5">
-      <div class="mb-4">
-        <h2 class="card-title">وضع التنفيذ</h2>
-        <p class="text-xs text-[var(--muted)]">اختر الوضع ثم اضغط تطبيق. الوضع الحقيقي غير مفعّل في هذه النسخة.</p>
-      </div>
-      <div id="modes" class="grid gap-3 md:grid-cols-4"></div>
-      <div class="flex flex-wrap items-center gap-3 mt-4">
-        <button id="btnSetMode" class="btn btn-primary">تطبيق الوضع المختار</button>
-        <span id="modeOut" class="text-xs text-[var(--muted)]"></span>
-      </div>
-    </div>
-
-    <div class="glass ring-gold p-5 space-y-5">
-      <div class="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 class="card-title">TickerAll · MT5 تجريبي (Exness)</h2>
-          <p class="text-xs text-[var(--muted)] mt-1">الوقف والهدف يُحملان على جهة الوسيط. الحسابات الحقيقية مرفوضة.</p>
-        </div>
-        <span id="taBadge" class="badge">غير مرتبط</span>
-      </div>
-
-      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <label><span class="label">API Key</span>
-          <input id="taKey" type="text" autocomplete="off" spellcheck="false" class="inp" placeholder="cf_api_…"></label>
-        <label><span class="label">رقم الحساب التجريبي</span>
-          <input id="taLogin" type="text" inputmode="numeric" autocomplete="off" class="inp"></label>
-        <label><span class="label">السيرفر</span>
-          <input id="taServer" type="text" autocomplete="off" class="inp" placeholder="Exness-MT5Trial16"></label>
-        <label><span class="label">كلمة مرور الحساب التجريبي</span>
-          <input id="taPass" type="password" autocomplete="new-password" class="inp"></label>
-        <label><span class="label">رمز الذهب لدى الوسيط</span>
-          <input id="taSymGold" type="text" class="inp" value="XAUUSD"></label>
-        <label><span class="label">رمز البيتكوين لدى الوسيط</span>
-          <input id="taSymBtc" type="text" class="inp" value="BTCUSD"></label>
-      </div>
-      <p class="text-[11px] text-[var(--muted)]">الحقول أعلاه لحساب المنصة. كلمة مرور الإدارة في أعلى الصفحة حقل منفصل يحمي الحفظ.</p>
-
-      <div class="flex flex-wrap gap-2">
-        <button id="btnSaveTa" class="btn btn-primary">حفظ</button>
-        <button id="btnTestTa" class="btn">اتصال واختبار الرموز</button>
-        <button id="btnClearTa" class="btn btn-danger">حذف</button>
-      </div>
-      <pre id="taOut" class="num text-xs text-slate-300 whitespace-pre-wrap rounded-2xl bg-black/30 border border-white/5 p-3 min-h-[3rem]"></pre>
-    </div>
-
-    <details class="glass p-5">
-      <summary class="flex flex-wrap items-center justify-between gap-2">
-        <span class="card-title">Binance Testnet <span class="text-xs text-[var(--muted)] font-normal">· للبيتكوين، أموال وهمية</span></span>
-        <span id="keyStatus" class="text-xs text-[var(--muted)]"></span>
-      </summary>
-      <div class="grid gap-4 md:grid-cols-4 mt-5">
-        <label><span class="label">نوع السوق</span>
-          <select id="market" class="inp"></select></label>
-        <label><span class="label">API Key</span>
-          <input id="apiKey" type="text" autocomplete="off" spellcheck="false" class="inp"></label>
-        <label><span class="label">API Secret</span>
-          <input id="apiSecret" type="password" autocomplete="off" class="inp"></label>
-        <div class="flex items-end gap-2">
-          <button id="btnSaveKeys" class="btn btn-primary flex-1">حفظ</button>
-          <button id="btnTest" class="btn flex-1">اختبار</button>
-          <button id="btnClearKeys" class="btn btn-danger">حذف</button>
-        </div>
-      </div>
-      <p id="testOut" class="text-xs text-slate-300 mt-4"></p>
-    </details>
-  </section>
-
-  <!-- ============ Tab: research ============ -->
-  <section data-pane="research" class="hidden grid gap-4 xl:grid-cols-3 fade-in">
-    <div class="glass p-5 xl:col-span-2">
-      <h2 class="card-title mb-3">لوحة المتصدرين</h2>
-      <div class="overflow-x-auto"><table class="tbl">
-        <thead><tr><th>الأصل</th><th>الاستراتيجية</th><th>نجاح%</th><th>PF</th><th>تراجع R</th><th>الدرجة</th></tr></thead>
-        <tbody id="boardRows"></tbody>
-      </table></div>
-    </div>
-    <div class="glass p-5">
-      <h2 class="card-title mb-3">سجل التطوير</h2>
-      <ul id="evoLog" class="space-y-2 text-sm max-h-96 overflow-y-auto"></ul>
-    </div>
-  </section>
-
-  <footer class="text-[11px] text-[var(--muted)] leading-relaxed px-2 mt-10">
-    ⚠️ نظام تعليمي يعمل بتنفيذ ورقي أو على حسابات تجريبية فقط. نتائج الاختبار التاريخي لا تضمن أرباحاً مستقبلية، والبحث التطوري قد يُفرط في التخصيص رغم التحقق خارج العينة.
-  </footer>
+  </main>
 </div>
 
 <script>
@@ -1816,9 +1937,11 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const num = (v, d = 2) => (v == null || isNaN(v)) ? "—" : Number(v).toLocaleString("en-US", {maximumFractionDigits: d, minimumFractionDigits: d});
 const dt = (s) => s ? String(s).slice(0, 16).replace("T", " ") : "—";
-const tone = (v) => (v > 0 ? "up" : v < 0 ? "down" : "flat");
+const hm = (ms) => new Date(ms).toLocaleTimeString("ar-SA", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
+const sgn = (v) => (v > 0 ? "up" : v < 0 ? "down" : "");
 const sideTxt = (s) => (String(s).toLowerCase() === "buy" ? '<span class="up">شراء</span>' : '<span class="down">بيع</span>');
-const modeTxt = (m) => ({paper: "ورقي", demo: "Binance", tickerall: "MT5"}[m] || esc(m || "—"));
+const MODE_AR = { paper: "ورقي", tickerall: "MT5 تجريبي", demo: "Binance Testnet" };
+const KIND_TAG = { open: "open", close: "close", warn: "warn", error: "error", evolve: "evolve", scan: "scan", info: "" };
 const describe = (g) => g ? `ATR ${g.atr_len} · عمق ${g.depth_mult} · بفر ${g.sl_buffer} · ${g.target_r}R · ${g.tf}H · EMA200 ${g.trend ? "✔" : "✘"}` : "";
 
 // ---------- admin password: remembered in this browser ----------
@@ -1826,235 +1949,225 @@ const PW_KEY = "ma_admin_pw";
 try { $("pw").value = localStorage.getItem(PW_KEY) || ""; } catch (e) {}
 $("pw").addEventListener("input", () => { try { localStorage.setItem(PW_KEY, $("pw").value); } catch (e) {} });
 
-// ---------- tabs ----------
-function showTab(name) {
-  document.querySelectorAll(".seg-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+// ---------- navigation ----------
+function showView(name) {
+  document.querySelectorAll("[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === name));
   document.querySelectorAll("[data-pane]").forEach(p => p.classList.toggle("hidden", p.dataset.pane !== name));
-  try { localStorage.setItem("ma_tab", name); } catch (e) {}
+  try { localStorage.setItem("ma_view", name); } catch (e) {}
+  if (name === "terminal") { setTimeout(() => { priceChart && priceChart.resize(); eqChart && eqChart.resize(); }, 50); }
 }
-document.querySelectorAll(".seg-btn").forEach(b => b.onclick = () => showTab(b.dataset.tab));
-showTab((() => { try { return localStorage.getItem("ma_tab") || "overview"; } catch (e) { return "overview"; } })());
+document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
+showView((() => { try { return localStorage.getItem("ma_view") || "terminal"; } catch (e) { return "terminal"; } })());
 
-let chart = null;
-let lastState = null;
+// ---------- state ----------
+let state = null;
+let market = null;
+let chartAsset = "XAUUSD";
+let priceChart = null;
+let eqChart = null;
+let nextRunAt = null;
+let pickedMode = null;
 
-function msg(t) { $("msg").textContent = t; }
-
-async function load() {
+async function loadState() {
   try {
     const r = await fetch("/api/state", { cache: "no-store" });
     if (!r.ok) throw new Error(r.status);
-    lastState = await r.json();
-    render(lastState);
-    $("liveDot").classList.remove("off");
-    $("liveText").textContent = "متصل · آخر تحديث " + new Date().toLocaleTimeString("ar-SA");
+    state = await r.json();
+    renderState(state);
+    $("liveDot").className = "dot live";
+    $("liveText").textContent = "متصل · تحديث الحالة " + new Date().toLocaleTimeString("ar-SA");
   } catch (e) {
-    $("liveDot").classList.add("off");
+    $("liveDot").className = "dot down";
     $("liveText").textContent = "انقطع الاتصال بالخادم، يُعاد المحاولة...";
   }
 }
 
-function kpi(label, value, sub, ring, extra = "") {
-  return `<div class="glass ${ring} p-4 md:p-5 fade-in">
-    <div class="eyebrow">${label}</div>
-    <div class="num text-2xl md:text-3xl font-bold mt-2">${value}</div>
-    <div class="text-[11px] text-[var(--muted)] mt-1.5">${sub}</div>${extra}
-  </div>`;
+async function loadMarket(force = false) {
+  try {
+    const r = await fetch("/api/market" + (force ? "?force=1" : ""), { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    market = await r.json();
+    renderPrices();
+    drawPrice();
+    $("chartMeta").textContent = "آخر تحديث " + hm(market.now * 1000) + " · المصدر: " + market.source;
+  } catch (e) {
+    $("chartMeta").textContent = "تعذّر تحديث الأسعار حالياً";
+  }
 }
 
-function render(s) {
-  const a = s.account;
-  const barW = Math.max(0, Math.min(100, a.win_rate || 0));
-  $("kpis").innerHTML = [
-    kpi("الرصيد", `$${num(a.balance)}`,
-        a.source === "tickerall" ? "رصيد الحساب التجريبي على الوسيط · مباشر"
-        : a.source === "tickerall-pending" ? "بانتظار أول قراءة من الوسيط"
-        : `ورقي · البداية $${num(a.start, 0)}`, "ring-gold"),
-    kpi("العائد", `<span class="${tone(a.return_pct)}">${num(a.return_pct)}%</span>`, `${a.trades} صفقة مغلقة`, a.return_pct >= 0 ? "ring-emerald" : "ring-rose"),
-    kpi("نسبة النجاح", `${num(a.win_rate, 1)}%`, "من الصفقات المغلقة", "ring-sky", `<div class="bar mt-3"><span style="width:${barW}%"></span></div>`),
-    kpi("معامل الربح", num(a.profit_factor), "الأرباح ÷ الخسائر", "ring-emerald"),
-  ].join("");
-  drawEquity(s.equity, a.start);
+function msg(t) { $("msg").textContent = t; }
+
+// ---------- render: prices ----------
+function renderPrices() {
+  if (!market) return;
+  const assets = market.assets || {};
+  const sess = (state && state.assets) || {};
+  $("priceCards").innerHTML = Object.entries(assets).map(([k, a]) => {
+    const open = sess[k] ? sess[k].session_open : null;
+    const pill = open === null ? "" : `<span class="pill ${open ? "up" : "down"}"><span class="dot ${open ? "up" : "down"}"></span>${open ? "السوق مفتوح" : "السوق مغلق"}</span>`;
+    const body = a.error
+      ? `<div class="down" style="margin-top:10px;font-size:13px">${esc(a.error)}</div>`
+      : `<div class="pval">${num(a.price)}</div>
+         <div class="pchg ${sgn(a.change_pct)}" style="margin-top:4px">${a.change_pct > 0 ? "+" : ""}${num(a.change_pct, 3)}% <span class="muted">· آخر 3 ساعات</span></div>`;
+    return `<div class="panel pcard ${chartAsset === k ? "sel" : ""}" data-pick="${k}">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <span class="title">${esc(a.label)}</span>${pill}
+      </div>${body}
+    </div>`;
+  }).join("");
+  document.querySelectorAll("[data-pick]").forEach(el => el.onclick = () => setChartAsset(el.dataset.pick));
+}
+
+function setChartAsset(k) {
+  chartAsset = k;
+  document.querySelectorAll("#chartTabs button").forEach(b => b.classList.toggle("on", b.dataset.asset === k));
+  renderPrices();
+  drawPrice();
+}
+document.querySelectorAll("#chartTabs button").forEach(b => b.onclick = () => setChartAsset(b.dataset.asset));
+
+// ---------- render: price chart ----------
+function drawPrice() {
+  const a = market && market.assets && market.assets[chartAsset];
+  if (!a || a.error || !a.closes) return;
+  const labels = a.times.map(hm);
+  const up = a.change_pct >= 0;
+  const color = up ? "#2fd3a0" : "#f4637a";
+  if (!priceChart) {
+    const ctx = $("priceChart").getContext("2d");
+    const grad = ctx.createLinearGradient(0, 0, 0, 300);
+    grad.addColorStop(0, "rgba(47,211,160,.22)");
+    grad.addColorStop(1, "rgba(47,211,160,0)");
+    priceChart = new Chart($("priceChart"), {
+      type: "line",
+      data: { labels, datasets: [{ data: a.closes, borderColor: color, backgroundColor: grad, fill: true,
+        borderWidth: 1.6, pointRadius: 0, tension: 0.25 }] },
+      options: { responsive: true, maintainAspectRatio: false, animation: { duration: 400 },
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { display: false },
+          tooltip: { backgroundColor: "#070b12", borderColor: "#1f2a3a", borderWidth: 1, titleColor: "#e8edf5",
+                     bodyColor: "#e8edf5", displayColors: false, callbacks: { label: c => num(c.parsed.y) } } },
+        scales: { x: { ticks: { color: "#6b7789", maxTicksLimit: 6, font: { family: "JetBrains Mono" } }, grid: { color: "rgba(148,163,184,.05)" } },
+                  y: { position: "right", ticks: { color: "#6b7789", font: { family: "JetBrains Mono" } }, grid: { color: "rgba(148,163,184,.07)" } } } },
+    });
+  } else {
+    priceChart.data.labels = labels;
+    priceChart.data.datasets[0].data = a.closes;
+    priceChart.data.datasets[0].borderColor = color;
+    priceChart.update();
+  }
+}
+
+// ---------- render: state ----------
+function renderState(s) {
   renderEngine(s.engine, s.activity);
-  renderAssets(s.assets);
+  renderAccount(s.account);
+  renderChampion(s.assets, s.account);
   renderOpen(s);
   renderClosed(s.closed);
+  drawEquity(s.equity, s.account.start);
   renderBoard(s.assets);
   renderEvolutions(s.evolutions);
   renderSettings(s.settings);
+  renderPrices();
   $("openCount").textContent = Object.values(s.assets).reduce((n, v) => n + (v.open || []).length, 0);
 }
 
-function renderAssets(assets) {
-  $("assets").innerHTML = Object.entries(assets).map(([k, v]) => {
-    const L = (v.live && v.live.latest) || {};
-    const champ = v.champion;
-    const err = v.live && v.live.error ? `<p class="text-rose-400 text-xs">⚠ ${esc(v.live.error)}</p>` : "";
-    const sess = v.session_open
-      ? '<span class="badge b-up">● السوق مفتوح</span>'
-      : '<span class="badge b-down">● السوق مغلق</span>';
-    const champBlock = champ ? `
-      <div class="rounded-2xl bg-black/30 border border-amber-400/15 p-4 text-xs space-y-1.5">
-        <div class="text-amber-300 font-semibold">الاستراتيجية المعتمدة</div>
-        <div class="text-slate-300 num">${esc(describe(champ.genome))}</div>
-        <div class="text-[var(--muted)]">تحقق: نجاح ${num(champ.result.val.win_rate,1)}% · PF ${num(champ.result.val.profit_factor)} · تراجع ${num(champ.result.val.max_dd_r)}R · ${champ.result.val.trades} صفقة</div>
-        <div class="text-slate-500">منذ ${dt(champ.since)}</div>
-      </div>` : `<div class="rounded-2xl bg-rose-500/10 border border-rose-500/20 p-4 text-xs text-rose-300">لا توجد استراتيجية معتمدة، التداول متوقف لهذا الأصل.</div>`;
-    return `<div class="glass ${champ ? "ring-gold" : ""} p-5 space-y-4 fade-in">
-      <div class="flex items-start justify-between gap-3">
-        <div>
-          <h3 class="card-title text-amber-300">${esc(v.label)}</h3>
-          <div class="mt-2">${sess}</div>
-        </div>
-        <div class="text-left">
-          <div class="num text-2xl font-bold">${num(v.live && v.live.price)}</div>
-          <div class="text-[10px] text-[var(--muted)]">آخر إغلاق H1</div>
-        </div>
-      </div>
-      ${err}${champBlock}
-      <div class="grid grid-cols-2 gap-2 text-xs text-slate-300">
-        <div class="rounded-xl bg-white/[.03] border border-white/5 p-3">قمة الأمس <b class="num block text-sm mt-1">${num(L.prev_day_high)}</b></div>
-        <div class="rounded-xl bg-white/[.03] border border-white/5 p-3">قاع الأمس <b class="num block text-sm mt-1">${num(L.prev_day_low)}</b></div>
-        <div class="col-span-2 rounded-xl bg-white/[.03] border border-white/5 p-3 text-amber-200">بانتظار التأكيد: ${esc(L.pending || "—")}</div>
-      </div>
-    </div>`;
-  }).join("");
+function renderAccount(a) {
+  $("acctBalance").textContent = "$" + num(a.balance);
+  $("acctSub").textContent = a.source === "tickerall" ? "رصيد الحساب التجريبي على الوسيط · مباشر"
+    : a.source === "tickerall-pending" ? "بانتظار أول قراءة من الوسيط"
+    : "ورقي · البداية $" + num(a.start, 0);
+  $("acctReturn").innerHTML = `<span class="${sgn(a.return_pct)}">${num(a.return_pct)}%</span>`;
+  $("acctWin").textContent = num(a.win_rate, 1) + "%";
+  $("acctPF").textContent = num(a.profit_factor);
+  $("acctTrades").textContent = a.trades;
+}
+
+function renderChampion(assets, acct) {
+  const blocks = Object.entries(assets).map(([k, v]) => {
+    const c = v.champion;
+    if (!c) return `<div style="border:1px solid rgba(244,99,122,.3);border-radius:10px;padding:10px 12px;font-size:12px;color:#ffb3c0;background:rgba(244,99,122,.06)">${esc(v.label)}: لا توجد استراتيجية معتمدة، التداول متوقف</div>`;
+    const t = c.result.val;
+    return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px;background:#070b12">
+      <div class="title" style="font-size:13px">${esc(v.label)}</div>
+      <div class="mono muted" style="font-size:12px;margin-top:6px">${esc(describe(c.genome))}</div>
+      <div class="muted" style="font-size:12px;margin-top:6px">تحقق: نجاح ${num(t.win_rate, 1)}% · PF ${num(t.profit_factor)} · تراجع ${num(t.max_dd_r)}R · ${t.trades} صفقة</div>
+      <div class="muted" style="font-size:11px;margin-top:4px">منذ ${dt(c.since)}</div></div>`;
+  });
+  $("champBlock").innerHTML = blocks.join("") || '<div class="empty">لا توجد أصول مفعّلة</div>';
 }
 
 function renderOpen(s) {
   const rows = Object.values(s.assets).flatMap(v => v.open || []);
-  $("openRows").innerHTML = rows.length ? rows.map(t => `
-    <tr>
+  $("openRows").innerHTML = rows.length ? rows.map(t => `<tr>
       <td>${esc(t.asset)}</td><td>${sideTxt(t.side)}</td>
-      <td class="num">${num(t.entry)}</td><td class="num">${num(t.stop)}</td><td class="num">${num(t.target)}</td>
-      <td><span class="badge">${modeTxt(t.mode)}</span></td>
-    </tr>`).join("") : `<tr><td colspan="6" class="p-6 text-[var(--muted)] text-center">لا توجد صفقات مفتوحة</td></tr>`;
-
+      <td class="mono">${num(t.entry)}</td><td class="mono">${num(t.stop)}</td><td class="mono">${num(t.target)}</td>
+      <td><span class="pill">${MODE_AR[t.mode] || esc(t.mode)}</span></td></tr>`).join("")
+    : `<tr><td colspan="6" class="empty">لا توجد صفقات مفتوحة</td></tr>`;
   const unmanaged = Object.values(s.assets).flatMap(v => ((v.live && v.live.ta_positions) || []).filter(p => !p.managed));
   $("unmanagedBox").classList.toggle("hidden", unmanaged.length === 0);
-  $("unmanagedRows").innerHTML = unmanaged.map(p => `
-    <tr><td>${esc(p.symbol)}</td><td>${sideTxt(p.side)}</td><td class="num">${num(p.volume)}</td>
-    <td class="num ${tone(p.profit)}">${num(p.profit)}</td><td class="num">${num(p.stopLoss)}</td><td class="num">${num(p.takeProfit)}</td></tr>`).join("");
+  $("unmanagedRows").innerHTML = unmanaged.map(p => `<tr><td>${esc(p.symbol)}</td><td>${sideTxt(p.side)}</td>
+    <td class="mono">${num(p.volume)}</td><td class="mono ${sgn(p.profit)}">${num(p.profit)}</td>
+    <td class="mono">${num(p.stopLoss)}</td><td class="mono">${num(p.takeProfit)}</td></tr>`).join("");
 }
 
 function renderClosed(closed) {
-  $("closedRows").innerHTML = closed.length ? closed.map(t => `
-    <tr>
+  $("closedRows").innerHTML = closed.length ? closed.map(t => `<tr>
       <td>${esc(t.asset)}</td><td>${sideTxt(t.side)}</td>
-      <td class="num ${tone(t.r)}">${num(t.r)}R</td>
-      <td class="num ${tone(t.pnl_usd)}">${t.pnl_usd > 0 ? "+" : ""}${num(t.pnl_usd)}$</td>
-      <td class="text-[var(--muted)]">${dt(t.closed_utc)}</td>
-    </tr>`).join("") : `<tr><td colspan="5" class="p-6 text-[var(--muted)] text-center">لا توجد صفقات مغلقة بعد</td></tr>`;
-}
-
-function renderBoard(assets) {
-  const board = Object.entries(assets).flatMap(([k, v]) => v.leaderboard.map(x => ({...x, asset: v.label})));
-  $("boardRows").innerHTML = board.length ? board.map(x => `
-    <tr>
-      <td>${esc(x.asset)}</td>
-      <td class="text-xs text-slate-300 num">${esc(describe(x.genome))}</td>
-      <td class="num">${num(x.result.val.win_rate, 1)}</td>
-      <td class="num">${num(x.result.val.profit_factor)}</td>
-      <td class="num">${num(x.result.val.max_dd_r)}</td>
-      <td class="num text-amber-300 font-semibold">${num(x.score, 3)}</td>
-    </tr>`).join("") : `<tr><td colspan="6" class="p-6 text-[var(--muted)] text-center">لم تُعتمد أي استراتيجية بعد. اضغط "تطوير".</td></tr>`;
-}
-
-function renderEvolutions(list) {
-  $("evoLog").innerHTML = list.length ? list.map(e => `
-    <li class="rounded-2xl bg-black/30 border border-white/5 p-3">
-      <div class="flex justify-between text-xs text-[var(--muted)]"><span>${esc(e.asset)}</span><span class="num">${dt(e.created_utc)}</span></div>
-      <div class="mt-1.5 text-sm">جُرّب ${e.evaluated} · نجح ${e.accepted}</div>
-      <div class="text-xs text-[var(--muted)] mt-0.5">${esc(e.note)}</div>
-    </li>`).join("") : `<li class="text-[var(--muted)]">لا يوجد سجل بعد</li>`;
+      <td class="mono ${sgn(t.r)}">${num(t.r)}R</td>
+      <td class="mono ${sgn(t.pnl_usd)}">${t.pnl_usd > 0 ? "+" : ""}${num(t.pnl_usd)}$</td>
+      <td class="muted mono">${dt(t.closed_utc)}</td></tr>`).join("")
+    : `<tr><td colspan="5" class="empty">لا توجد صفقات مغلقة بعد</td></tr>`;
 }
 
 function drawEquity(points, start) {
   const empty = points.length === 0;
   $("equityEmpty").classList.toggle("hidden", !empty);
   $("equityMeta").textContent = empty ? "" : `${points.length} صفقة مغلقة`;
-  if (empty) { if (chart) { chart.destroy(); chart = null; } return; }
+  if (empty) { if (eqChart) { eqChart.destroy(); eqChart = null; } return; }
   const labels = ["البداية", ...points.map(p => dt(p.t))];
   const data = [start, ...points.map(p => p.bal)];
-  if (!chart) {
-    const ctx = $("equity").getContext("2d");
-    const grad = ctx.createLinearGradient(0, 0, 0, 280);
-    grad.addColorStop(0, "rgba(52,211,153,.35)");
-    grad.addColorStop(1, "rgba(52,211,153,0)");
-    chart = new Chart($("equity"), {
+  if (!eqChart) {
+    eqChart = new Chart($("equityChart"), {
       type: "line",
-      data: { labels, datasets: [{ label: "الرصيد", data, borderColor: "#34d399", backgroundColor: grad,
-        fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2.5 }] },
-      options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-        plugins: { legend: { display: false },
-          tooltip: { backgroundColor: "rgba(5,7,11,.95)", borderColor: "rgba(52,211,153,.35)", borderWidth: 1,
-                     titleColor: "#e6ebf3", bodyColor: "#a7f3d0", padding: 12, displayColors: false,
-                     callbacks: { label: c => `$${num(c.parsed.y)}` } } },
-        scales: { x: { ticks: { color: "#64748b", maxTicksLimit: 8 }, grid: { color: "rgba(255,255,255,.03)" } },
-                  y: { ticks: { color: "#64748b", callback: v => "$" + num(v, 0) }, grid: { color: "rgba(255,255,255,.05)" } } } },
+      data: { labels, datasets: [{ data, borderColor: "#e7b75a", borderWidth: 1.8, pointRadius: 0, tension: 0.25, fill: false }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { x: { ticks: { color: "#6b7789", maxTicksLimit: 8 }, grid: { color: "rgba(148,163,184,.05)" } },
+                  y: { position: "right", ticks: { color: "#6b7789", callback: v => "$" + num(v, 0) }, grid: { color: "rgba(148,163,184,.07)" } } } },
     });
   } else {
-    chart.data.labels = labels;
-    chart.data.datasets[0].data = data;
-    chart.update();
+    eqChart.data.labels = labels;
+    eqChart.data.datasets[0].data = data;
+    eqChart.update();
   }
 }
 
-let pickedMode = null;
-function renderSettings(st) {
-  if (!st) return;
-  const cur = st.mode;
-  $("modes").innerHTML = st.modes.map(m => `
-    <label class="block rounded-2xl border p-4 transition ${m.available ? "border-white/10 bg-white/[.02] cursor-pointer hover:border-amber-400/40" : "border-white/5 opacity-40"}">
-      <div class="flex items-center gap-2">
-        <input type="radio" name="mode" value="${esc(m.key)}" ${m.available ? "" : "disabled"} ${(pickedMode || cur) === m.key ? "checked" : ""} class="accent-amber-400">
-        <span class="font-semibold text-sm">${esc(m.name)}</span>
-        ${cur === m.key ? '<span class="badge b-up">مفعّل</span>' : ""}
-      </div>
-      <p class="text-[11px] text-[var(--muted)] mt-2">${esc(m.note)}</p>
-    </label>`).join("");
-  document.querySelectorAll('input[name="mode"]').forEach(el => el.onchange = () => { pickedMode = el.value; });
-
-  $("keyStatus").textContent = st.keys.present ? `🔑 ${st.keys.masked}` : "";
-  if (!$("market").options.length) $("market").innerHTML = st.markets.map(m => `<option value="${esc(m.key)}">${esc(m.label)}</option>`).join("");
-  if (st.last_test) $("testOut").textContent = st.last_test.ok ? `✔ آخر اختبار ناجح: ${num(st.last_test.usdt_free)} USDT` : `✘ آخر اختبار فشل: ${st.last_test.error}`;
-
-  const ta = st.tickerall;
-  $("taBadge").textContent = ta.present ? (ta.session ? "متصل ●" : "محفوظ · غير متصل") : "غير مرتبط";
-  $("taBadge").className = "badge " + (ta.present ? (ta.session ? "b-up" : "b-gold") : "");
-  if (!$("taSymGold").dataset.touched) $("taSymGold").value = ta.symbols.XAUUSD;
-  if (!$("taSymBtc").dataset.touched) $("taSymBtc").value = ta.symbols.BTCUSDT;
-  if (!$("taServer").value && ta.server) $("taServer").value = ta.server;
-  $("taOut").textContent = ta.present
-    ? `مفتاح: ${ta.api_key_masked} · حساب: ${ta.login_masked} · سيرفر: ${ta.server}` +
-      (ta.session ? `\nالجلسة نشطة حتى ${dt(ta.session.expiresAt)}` : "\nلا توجد جلسة نشطة، اضغط اتصال واختبار.") +
-      (ta.last_test ? `\n${ta.last_test.ok ? "✔ " + ta.last_test.note : "✘ " + ta.last_test.error}` : "")
-    : "لم تُحفظ بيانات TickerAll بعد.";
-}
-
-// ---------- engine panel ----------
-let nextRunAt = null;
-const KIND = { open: "b-up", close: "b-gold", warn: "b-down", error: "b-down", evolve: "b-sky", scan: "b-sky", info: "" };
-const MODE_AR = { paper: "ورقي", tickerall: "MT5 تجريبي", demo: "Binance Testnet" };
+// ---------- engine ----------
 function renderEngine(e, acts) {
   if (!e) return;
-  $("radar").classList.toggle("on", e.status === "analyzing");
+  const running = e.status === "analyzing";
+  $("radar").classList.toggle("on", running);
   $("engMsg").textContent = e.message;
-  if (e.status === "analyzing") {
+  if (running) {
     const secs = e.started_at ? Math.max(0, e.now - e.started_at) : 0;
     $("engLast").textContent = `فحص جارٍ منذ ${secs} ث${e.current ? " · " + e.current : ""}`;
   } else {
-    $("engLast").textContent = e.last_run ? "آخر فحص مكتمل " + new Date(e.last_run * 1000).toLocaleTimeString("ar-SA") : "لم يكتمل أي فحص بعد";
+    $("engLast").textContent = e.last_run ? "آخر فحص مكتمل " + hm(e.last_run * 1000) : "لم يكتمل أي فحص بعد";
   }
   $("engCycles").textContent = e.cycles;
   $("engMode").textContent = MODE_AR[e.mode] || e.mode;
+  $("navCycles").textContent = e.cycles;
+  $("engPill").textContent = "";
+  const pill = $("engPill");
+  pill.textContent = running ? "المحرك: يحلل الآن" : "المحرك: جاهز";
+  pill.className = "pill " + (running ? "info" : "up");
   nextRunAt = e.next_run ? e.next_run * 1000 : null;
-  $("engFeed").innerHTML = acts.length ? acts.map(a => `
-    <li class="flex items-start gap-3 text-xs rounded-xl bg-white/[.02] border border-white/5 p-2.5">
-      <span class="num text-[var(--muted)] shrink-0">${new Date(a.t * 1000).toLocaleTimeString("ar-SA")}</span>
-      <span class="badge ${KIND[a.kind] || ""} shrink-0">${esc(a.asset || "النظام")}</span>
-      <span class="text-slate-300">${esc(a.text)}</span>
-    </li>`).join("") : `<li class="text-[var(--muted)] text-xs">لا توجد أحداث بعد</li>`;
+  $("engFeed").innerHTML = acts.length ? acts.map(a => `<li>
+      <span class="mono muted" style="font-size:12px;white-space:nowrap">${hm(a.t * 1000)}</span>
+      <span class="tag ${KIND_TAG[a.kind] || ""}">${esc(a.asset || "النظام")}</span>
+      <span style="color:#cbd5e1">${esc(a.text)}</span></li>`).join("")
+    : `<li class="muted">لا توجد أحداث بعد</li>`;
 }
 function tickCountdown() {
   if (!nextRunAt) { $("engNext").textContent = ""; return; }
@@ -2062,6 +2175,52 @@ function tickCountdown() {
   $("engNext").textContent = `الفحص التالي خلال ${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
 }
 setInterval(tickCountdown, 1000);
+
+// ---------- research ----------
+function renderBoard(assets) {
+  const board = Object.entries(assets).flatMap(([k, v]) => v.leaderboard.map(x => ({...x, asset: v.label})));
+  $("boardRows").innerHTML = board.length ? board.map(x => `<tr>
+      <td>${esc(x.asset)}</td><td class="mono muted" style="font-size:12px">${esc(describe(x.genome))}</td>
+      <td class="mono">${num(x.result.val.win_rate, 1)}</td><td class="mono">${num(x.result.val.profit_factor)}</td>
+      <td class="mono">${num(x.result.val.max_dd_r)}</td><td class="mono gold">${num(x.score, 3)}</td></tr>`).join("")
+    : `<tr><td colspan="6" class="empty">لم تُعتمد أي استراتيجية بعد. اضغط "تطوير".</td></tr>`;
+}
+function renderEvolutions(list) {
+  $("evoLog").innerHTML = list.length ? list.map(e => `<li style="padding:10px;border-radius:10px;background:#070b12;border:1px solid var(--line)">
+      <div style="display:flex;justify-content:space-between;font-size:12px" class="muted"><span>${esc(e.asset)}</span><span class="mono">${dt(e.created_utc)}</span></div>
+      <div style="margin-top:6px">جُرّب ${e.evaluated} · نجح ${e.accepted}</div>
+      <div class="muted" style="font-size:12px;margin-top:3px">${esc(e.note)}</div></li>`).join("")
+    : `<li class="muted">لا يوجد سجل بعد</li>`;
+}
+
+// ---------- brokers ----------
+function renderSettings(st) {
+  if (!st) return;
+  const cur = st.mode;
+  $("modes").innerHTML = st.modes.map(m => `<label class="mode ${m.available ? "" : "dis"} ${(pickedMode || cur) === m.key ? "sel" : ""}">
+      <div style="display:flex;align-items:center;gap:8px">
+        <input type="radio" name="mode" value="${esc(m.key)}" ${m.available ? "" : "disabled"} ${(pickedMode || cur) === m.key ? "checked" : ""} style="accent-color:#e7b75a">
+        <span class="n">${esc(m.name)}</span>${cur === m.key ? '<span class="pill up" style="margin-inline-start:auto">مفعّل</span>' : ""}
+      </div>
+      <div class="d">${esc(m.note)}</div></label>`).join("");
+  document.querySelectorAll('input[name="mode"]').forEach(el => el.onchange = () => { pickedMode = el.value; renderSettings(state.settings); });
+
+  $("keyStatus").textContent = st.keys.present ? "🔑 " + st.keys.masked : "";
+  if (!$("market").options.length) $("market").innerHTML = st.markets.map(m => `<option value="${esc(m.key)}">${esc(m.label)}</option>`).join("");
+  if (st.last_test) $("testOut").textContent = st.last_test.ok ? `✔ آخر اختبار ناجح: ${num(st.last_test.usdt_free)} USDT` : `✘ آخر اختبار فشل: ${st.last_test.error}`;
+
+  const ta = st.tickerall;
+  $("taBadge").textContent = ta.present ? (ta.session ? "متصل ●" : "محفوظ · غير متصل") : "غير مرتبط";
+  $("taBadge").className = "pill " + (ta.present ? (ta.session ? "up" : "gold") : "");
+  if (!$("taSymGold").dataset.touched) $("taSymGold").value = ta.symbols.XAUUSD;
+  if (!$("taSymBtc").dataset.touched) $("taSymBtc").value = ta.symbols.BTCUSDT;
+  if (!$("taServer").value && ta.server) $("taServer").value = ta.server;
+  if (!$("taOut").dataset.busy) $("taOut").textContent = ta.present
+    ? `مفتاح: ${ta.api_key_masked} · حساب: ${ta.login_masked} · سيرفر: ${ta.server}` +
+      (ta.session ? `\nالجلسة نشطة حتى ${dt(ta.session.expiresAt)}` : "\nلا توجد جلسة نشطة، اضغط اتصال واختبار.") +
+      (ta.last_test ? `\n${ta.last_test.ok ? "✔ " + (ta.last_test.note || "متصل") : "✘ " + ta.last_test.error}` : "")
+    : "لم تُحفظ بيانات TickerAll بعد.";
+}
 
 // ---------- requests ----------
 async function postJson(url, body) {
@@ -2072,11 +2231,9 @@ async function postJson(url, body) {
     return { ok: false, data: { error: "أدخل كلمة مرور الإدارة في أعلى الصفحة أولاً" }, status: 0 };
   }
   $("pw").classList.remove("bad");
-  const r = await fetch(url, {
-    method: "POST",
+  const r = await fetch(url, { method: "POST",
     headers: { "Content-Type": "application/json", "X-Admin-Password": pwd },
-    body: JSON.stringify(body || {}),
-  });
+    body: JSON.stringify(body || {}) });
   const j = await r.json().catch(() => ({}));
   if (r.status === 401) {
     $("pw").classList.add("bad");
@@ -2087,13 +2244,22 @@ async function postJson(url, body) {
 
 function report(res, el) {
   const text = res.ok ? (res.data.note || "تم ✔") : "✘ " + (res.data.error || ("خطأ " + res.status));
-  if (el) el.textContent = text; else msg(text);
-  setTimeout(load, 800);
+  if (el) { el.textContent = text; el.dataset.busy = ""; } else msg(text);
+  setTimeout(loadState, 600);
 }
 
+async function runScan(btn) {
+  if (btn) btn.disabled = true;
+  const res = await postJson("/api/run");
+  report(res);
+  if (btn) setTimeout(() => btn.disabled = false, 1500);
+  loadMarket(true);
+}
+$("btnRun").onclick = () => runScan($("btnRun"));
+$("engBtnRun").onclick = () => runScan($("engBtnRun"));
 $("btnScope").onclick = async () => report(await postJson("/api/config", { assets: $("scope").value }));
-$("btnRun").onclick = async () => report(await postJson("/api/run"));
 $("btnEvolve").onclick = async () => report(await postJson("/api/evolve"));
+$("btnMarket").onclick = () => loadMarket(true);
 
 $("btnSetMode").onclick = async () => {
   const sel = document.querySelector('input[name="mode"]:checked');
@@ -2103,48 +2269,45 @@ $("btnSetMode").onclick = async () => {
 };
 
 $("btnSaveTa").onclick = async () => {
-  $("taOut").textContent = "جارٍ الحفظ...";
+  $("taOut").dataset.busy = "1"; $("taOut").textContent = "جارٍ الحفظ...";
   const res = await postJson("/api/tickerall", {
     api_key: $("taKey").value, login: $("taLogin").value, server: $("taServer").value,
     password: $("taPass").value,
-    symbols: { XAUUSD: $("taSymGold").value, BTCUSDT: $("taSymBtc").value },
-  });
+    symbols: { XAUUSD: $("taSymGold").value, BTCUSDT: $("taSymBtc").value } });
   if (res.ok) { $("taKey").value = ""; $("taPass").value = ""; }
   report(res, $("taOut"));
 };
 $("btnTestTa").onclick = async () => {
-  $("taOut").textContent = "جارٍ الاتصال بالوسيط...";
+  $("taOut").dataset.busy = "1"; $("taOut").textContent = "جارٍ الاتصال بالوسيط...";
   const res = await postJson("/api/tickerall/test");
   if (!res.ok) return report(res, $("taOut"));
   const m = (res.data.matches || []).join("، ") || "لم يُعثر على رموز ذهب أو بيتكوين";
   const lines = Object.entries(res.data.checks || {}).map(([a, v]) => `${a}: ${v.ok ? "✔ حجم أدنى " + v.volumeMin : "✘ " + v.error}`);
-  $("taOut").textContent = `✔ ${res.data.note}\nرموز مشابهة: ${m}\n${lines.join("\n")}`;
-  setTimeout(load, 800);
+  $("taOut").dataset.busy = ""; $("taOut").textContent = `✔ ${res.data.note}\nرموز مشابهة: ${m}\n${lines.join("\n")}`;
+  setTimeout(loadState, 600);
 };
 $("btnClearTa").onclick = async () => {
   if (!confirm("حذف بيانات TickerAll؟")) return;
   report(await postJson("/api/tickerall/clear"), $("taOut"));
 };
-
 $("btnSaveKeys").onclick = async () => {
   const res = await postJson("/api/keys", { api_key: $("apiKey").value, api_secret: $("apiSecret").value, market: $("market").value });
   if (res.ok) { $("apiKey").value = ""; $("apiSecret").value = ""; }
   report(res, $("testOut"));
 };
-$("btnTest").onclick = async () => {
-  $("testOut").textContent = "جارٍ الاختبار...";
-  report(await postJson("/api/broker/test"), $("testOut"));
-};
+$("btnTest").onclick = async () => { $("testOut").textContent = "جارٍ الاختبار..."; report(await postJson("/api/broker/test"), $("testOut")); };
 $("btnClearKeys").onclick = async () => {
   if (!confirm("حذف مفاتيح Binance؟")) return;
   report(await postJson("/api/keys/clear"), $("testOut"));
 };
-
 $("taSymGold").oninput = () => $("taSymGold").dataset.touched = "1";
 $("taSymBtc").oninput = () => $("taSymBtc").dataset.touched = "1";
 
-load();
-setInterval(load, 5000);
+// ---------- boot ----------
+loadState();
+loadMarket();
+setInterval(loadState, 5000);
+setInterval(() => loadMarket(false), 10000);
 </script>
 </body>
 </html>
