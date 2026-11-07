@@ -1219,13 +1219,64 @@ def fmt(v) -> str:
     return "—" if v is None else f"{v:,.2f}"
 
 
+TA_CANDLE_TF = {"1m": "M1", "1h": "H1", "1d": "D1"}
+INTERVAL_SEC = {"1m": 60, "1h": 3600, "1d": 86400}
+
+
+def _ts_any(value):
+    """يقبل وقتاً ISO أو رقم ميلي ثانية/ثانية."""
+    if isinstance(value, (int, float)) and value > 0:
+        return datetime.fromtimestamp(value / 1000 if value > 1e11 else value, tz=timezone.utc)
+    return _parse_ts(value)
+
+
+def ta_history(asset: str, interval: str, count: int) -> pd.DataFrame:
+    """شموع من الوسيط عبر TickerAll. المسار وأسماء الحقول غير مؤكدة بعد:
+    عند أي شكل غير متوقع يُرفع خطأ يحتوي على جزء من الرد لتصحيحه من السجل."""
+    client = ta_client(store)
+    data = client._acct("GET", "/candles", params={
+        "symbol": ta_symbol(store, asset), "timeframe": TA_CANDLE_TF[interval], "count": count})
+    items = _items(data, "candles", "data", "items", "bars")
+    recs = []
+    for c in items or []:
+        if not isinstance(c, dict):
+            continue
+        t = _ts_any(c.get("time") or c.get("timestamp") or c.get("open_time") or c.get("t"))
+        if t is None or c.get("open") is None:
+            continue
+        recs.append({"open_time": t, "open": float(c["open"]), "high": float(c["high"]),
+                     "low": float(c["low"]), "close": float(c["close"]),
+                     "volume": float(c.get("tick_volume") or c.get("volume") or 0)})
+    if not recs:
+        raise TickerAllError(502, "NO_CANDLES", f"لم تُفهم الشموع من الرد: {str(data)[:160]}")
+    df = pd.DataFrame(recs)
+    df["open_time"] = pd.to_datetime(df["open_time"], utc=True)
+    df["close_time"] = df["open_time"] + pd.Timedelta(seconds=INTERVAL_SEC[interval]) - pd.Timedelta(milliseconds=1)
+    return df.drop_duplicates("open_time").sort_values("open_time").reset_index(drop=True)
+
+
 def load_market(asset: str):
     info = ASSETS[asset]
-    h1 = completed_only(fetch_history(info["symbol"], "1h", HISTORY_H1))
+    h1 = d1 = None
+    if ta_creds(store):
+        try:
+            h1 = ta_history(asset, "1h", HISTORY_H1)
+            d1 = ta_history(asset, "1d", HISTORY_D1)
+            if len(h1) < 300 or len(d1) < 30:
+                raise TickerAllError(502, "SHORT", f"شموع قليلة من الوسيط: H1={len(h1)} D1={len(d1)}")
+            h1, d1 = completed_only(h1), completed_only(d1)
+        except Exception as exc:
+            log_event("warn", f"شموع الوسيط غير متاحة، نستخدم Binance: {str(exc)[:160]}", asset)
+            h1 = d1 = None
+    if h1 is None:
+        h1 = completed_only(fetch_history(info["symbol"], "1h", HISTORY_H1))
+        d1 = completed_only(fetch_history(info["symbol"], "1d", HISTORY_D1))
     h1["open_ms"] = [int(t.timestamp() * 1000) for t in h1["open_time"]]
     h1["close_ms"] = [int(t.timestamp() * 1000) for t in h1["close_time"]]
-    daily = completed_only(fetch_history(info["symbol"], "1d", HISTORY_D1))
-    return h1, daily
+    return h1, d1
+
+
+
 
 
 def format_open(label, t, g, mode):
@@ -1553,15 +1604,28 @@ def live_market(force: bool = False) -> dict:
     out = {}
     for asset, info in ASSETS.items():
         try:
-            r = requests.get(BINANCE_URL, params={"symbol": info["symbol"], "interval": "1m", "limit": 180},
-                             timeout=TIMEOUT)
-            r.raise_for_status()
-            rows = r.json()
-            closes = [float(x[4]) for x in rows]
-            times = [int(x[0]) for x in rows]
+            source = "TickerAll"
+            if ta_creds(store):
+                try:
+                    df = ta_history(asset, "1m", 180)
+                except Exception:
+                    df = None
+            else:
+                df = None
+            if df is None or len(df) == 0:
+                source = "Binance"
+                r = requests.get(BINANCE_URL, params={"symbol": info["symbol"], "interval": "1m", "limit": 180},
+                                 timeout=TIMEOUT)
+                r.raise_for_status()
+                rows = r.json()
+                closes = [float(x[4]) for x in rows]
+                times = [int(x[0]) for x in rows]
+            else:
+                closes = df["close"].tolist()
+                times = [int(t.timestamp() * 1000) for t in df["open_time"]]
             last, first = closes[-1], closes[0]
             out[asset] = {"label": info["label"], "price": last, "change_pct": round((last / first - 1) * 100, 3),
-                          "closes": closes, "times": times, "updated": int(now)}
+                          "closes": closes, "times": times, "updated": int(now), "source": source}
         except Exception as exc:
             out[asset] = {"label": info["label"], "error": f"تعذّر جلب السعر: {type(exc).__name__}",
                           "updated": int(now)}
@@ -1572,7 +1636,7 @@ def live_market(force: bool = False) -> dict:
 @app.get("/api/market")
 def market():
     return jsonify({"assets": live_market(force=request.args.get("force") == "1"),
-                    "source": "Binance (PAXG كبديل للذهب)", "now": int(time.time())})
+                    "source": "الوسيط TickerAll، وBinance عند الغياب (الذهب عبر PAXG)", "now": int(time.time())})
 
 
 @app.get("/api/state")
