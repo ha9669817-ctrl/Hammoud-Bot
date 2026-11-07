@@ -47,7 +47,7 @@ MAX_HOLD_HOURS = 96
 TREND_EMA = 200
 TRAIN_SHARE = 0.7      # 70% تدريب، 30% تحقق
 MIN_TRAIN_TRADES = 15
-MIN_VAL_TRADES = 8
+MIN_VAL_TRADES = 30
 MIN_PF = 1.1
 MAX_VAL_DD_R = 15.0
 DISCLAIMER = "⚠️ تنفيذ تعليمي، وليس توصية مالية."
@@ -74,20 +74,36 @@ def _champion_file_write(asset, data):
         print(f"[champions] تعذر حفظ ملف {asset}: {exc}", flush=True)
 
 
+SEED_CHAMPIONS_FILE = Path(__file__).resolve().parent / "seed" / "champions.json"
+
+
+def _seed_champions():
+    """استراتيجيات مرفوعة مع المستودع (تصدير من الواجهة ثم حفظ في GitHub)."""
+    try:
+        data = json.loads(SEED_CHAMPIONS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def restore_champions(store_obj):
-    """عند التشغيل: إذا لم توجد استراتيجية في قاعدة البيانات نستعيدها من الملفات."""
-    restored = []
+    """عند التشغيل: إذا لم توجد استراتيجية في قاعدة البيانات نستعيدها من ملفات التشغيل ثم من المستودع."""
+    restored, seed = [], _seed_champions()
     for asset in ASSETS:
         if store_obj.get_champion(asset):
             continue
+        data = None
         path = _champion_file(asset)
-        if not path.exists():
-            continue
         try:
-            store_obj.meta_set(f"champion|{asset}", json.loads(path.read_text(encoding="utf-8")))
-            restored.append(asset)
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             print(f"[champions] تعذر قراءة ملف {asset}: {exc}", flush=True)
+        if data is None:
+            data = seed.get(asset)
+        if data:
+            store_obj.meta_set(f"champion|{asset}", data)
+            restored.append(asset)
     return restored
 
 BINANCE_URL = "https://data-api.binance.vision/api/v3/klines"
@@ -1246,6 +1262,15 @@ def in_session(asset: str, now=None) -> bool:
     return False
 
 
+def next_open_utc(asset, now=None):
+    """أقرب فتح للسوق وفق جدول in_session نفسه؛ None إذا كان مفتوحاً أو لا يغلق."""
+    now = now or datetime.now(timezone.utc)
+    if asset != "XAUUSD" or in_session(asset, now):
+        return None
+    days = (7 - now.weekday()) % 7 or 7
+    return (now + timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
 def describe(g: dict) -> str:
     if g.get("rule", "sweep") != "sweep":
         return f"{RULE_AR.get(g['rule'], g['rule'])} | وقف {g.get('atr_stop')}×ATR | هدف {g['target_r']}R | إطار {g['tf']}H"
@@ -1480,6 +1505,9 @@ def run_trading(send_alerts=True):
                                "has_champion": res["has_champion"], "errors": res["errors"],
                                "note": res["note"], "updated": int(time.time()),
                                "ta_positions": res["ta_positions"], "ta_account": res["ta_account"]}
+                snap_now = res.get("ta_account") or {}
+                if snap_now.get("balance") is not None:
+                    store.meta_set("ta_snapshot", {"balance": snap_now.get("balance"), "equity": snap_now.get("equity")})
                 for t in res.get("closed") or []:
                     log_event("close", f"إغلاق صفقة {t.get('side', '')} · {_fmt(t.get('r'))}R", asset)
                 if res.get("opened"):
@@ -1546,6 +1574,8 @@ def ta_autoconnect():
         client = ta_client(store)
         client.connect()
         info = client.account_info()
+        if info.get("balance") is not None:
+            store.meta_set("ta_snapshot", {"balance": info.get("balance"), "equity": info.get("equity")})
         meta["ta_test"] = {"ok": True, "at": int(time.time()), "note": "اتصال تلقائي عند التشغيل"}
         print(f"[tickerall] auto-connected, balance={info.get('balance')} {info.get('currency')}", flush=True)
         if os.getenv("DEFAULT_MODE") == "tickerall":
@@ -1623,7 +1653,7 @@ def _build_state() -> dict:
     source, broker_equity = "paper", None
     if store.get_mode() == "tickerall":
         snap = next((live[a]["ta_account"] for a in store.get_assets()
-                     if (live.get(a) or {}).get("ta_account")), None)
+                     if (live.get(a) or {}).get("ta_account")), None) or store.meta_get("ta_snapshot")
         if snap and snap.get("balance") is not None:
             balance = float(snap["balance"])
             broker_equity = snap.get("equity")
@@ -1645,7 +1675,7 @@ def _build_state() -> dict:
     for a in store.get_assets():
         assets[a] = {"label": ASSETS[a]["label"], "champion": store.get_champion(a),
                      "leaderboard": store.top_strategies(a, 8), "open": store.open_trades(a),
-                     "session_open": in_session(a), "live": live.get(a, {})}
+                     "session_open": in_session(a), "next_open": next_open_utc(a), "live": live.get(a, {})}
     return {
         "config": {"assets": store.get_assets(), "risk_pct": CONFIG["risk_pct"],
                    "evolve_every_hours": CONFIG["evolve_every_hours"]},
@@ -1897,6 +1927,13 @@ def run_now():
     return jsonify({"ok": True, "note": note})
 
 
+@app.get("/api/champions/export")
+def champions_export():
+    if not _authorized():
+        return _deny()
+    return jsonify({a: store.get_champion(a) for a in store.get_assets() if store.get_champion(a)})
+
+
 @app.post("/api/evolve")
 def evolve_now():
     if not _authorized():
@@ -2118,6 +2155,7 @@ INDEX_HTML = r'''
         <button id="btnScope" class="btn">حفظ الأصول</button>
         <button id="btnRun" class="btn">فحص الآن</button>
         <button id="btnEvolve" class="btn btn-primary">تطوير</button>
+        <button id="btnExport" class="btn">تصدير الاستراتيجيات</button>
       </div>
     </header>
     <p id="msg" class="info" style="margin:0;padding:6px 22px;font-size:12px;min-height:18px"></p>
@@ -2382,6 +2420,11 @@ async function loadMarket(force = false) {
 function msg(t) { $("msg").textContent = t; }
 
 // ---------- render: prices ----------
+function fmtOpen(iso) {
+  try { return new Date(iso).toLocaleString("ar-SA", { timeZone: "Asia/Riyadh", weekday: "long", hour: "2-digit", minute: "2-digit" }); }
+  catch (e) { return iso; }
+}
+
 function renderPrices() {
   if (!market) return;
   const assets = market.assets || {};
@@ -2393,10 +2436,11 @@ function renderPrices() {
       ? `<div class="down" style="margin-top:10px;font-size:13px">${esc(a.error)}</div>`
       : `<div class="pval">${num(a.price)}</div>
          <div class="pchg ${sgn(a.change_pct)}" style="margin-top:4px">${a.change_pct > 0 ? "+" : ""}${num(a.change_pct, 3)}% <span class="muted">· آخر 3 ساعات</span></div>`;
+    const opensTxt = !open && sess[k] && sess[k].next_open ? `<div class="muted" style="font-size:12px;margin-top:6px">يفتح ${fmtOpen(sess[k].next_open)} (بتوقيت الرياض)</div>` : "";
     return `<div class="panel pcard ${chartAsset === k ? "sel" : ""}" data-pick="${k}">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
         <span class="title">${esc(a.label)}</span>${pill}
-      </div>${body}
+      </div>${body}${opensTxt}
     </div>`;
   }).join("");
   document.querySelectorAll("[data-pick]").forEach(el => el.onclick = () => setChartAsset(el.dataset.pick));
@@ -2539,6 +2583,7 @@ function renderEngine(e, acts) {
   } else {
     $("engLast").textContent = e.last_run ? "آخر فحص مكتمل " + hm(e.last_run * 1000) : "لم يكتمل أي فحص بعد";
   }
+  if (e.evolving) $("engLast").textContent += " · التطوير جارٍ";
   $("engCycles").textContent = e.cycles;
   $("engMode").textContent = MODE_AR[e.mode] || e.mode;
   $("navCycles").textContent = e.cycles;
@@ -2643,6 +2688,15 @@ $("btnRun").onclick = () => runScan($("btnRun"));
 $("engBtnRun").onclick = () => runScan($("engBtnRun"));
 $("btnScope").onclick = async () => report(await postJson("/api/config", { assets: $("scope").value }));
 $("btnEvolve").onclick = async () => report(await postJson("/api/evolve"));
+$("btnExport").onclick = async () => {
+  const pwd = $("pw").value.trim();
+  if (!pwd) { $("pw").classList.add("bad"); $("pw").focus(); return msg("أدخل كلمة مرور الإدارة أولاً"); }
+  const r = await fetch("/api/champions/export", { headers: { "X-Admin-Password": pwd } });
+  if (!r.ok) return msg("تعذر التصدير (تحقق من كلمة المرور)");
+  const txt = JSON.stringify(await r.json(), null, 2);
+  try { await navigator.clipboard.writeText(txt); msg("نُسخت الاستراتيجيات. الصقها في الملف seed/champions.json داخل GitHub ثم احفظ."); }
+  catch (e) { msg("تعذر النسخ التلقائي، أعد المحاولة من متصفح آخر."); }
+};
 $("btnMarket").onclick = () => loadMarket(true);
 
 $("btnSetMode").onclick = async () => {
