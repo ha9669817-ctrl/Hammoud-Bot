@@ -195,10 +195,216 @@ def sweep_run(h1: pd.DataFrame, daily: pd.DataFrame, params: dict):
     }
     return signals, latest
 
+def _ema(s: pd.Series, n: int) -> pd.Series:
+    return s.ewm(span=n, adjust=False).mean()
+
+
+# =====================================================================
+# استراتيجيات المؤشرات (تُكتب هنا بالكامل، بدون كود طرف ثالث)
+# كل قاعدة تُنتج إشارات دخول بنفس صيغة sweep_run، فتمر عبر نفس الاختبار
+# التاريخي وبوابات التحقق، ولا يُعتمد منها إلا ما ينجح فعلاً.
+# =====================================================================
+RULES = ["sweep", "rsi", "macd", "bollinger", "ema_9_21", "ema_50_200", "supertrend",
+         "psar", "ao", "heikin", "dual_thrust", "vwap", "london"]
+RULE_AR = {
+    "sweep": "قمة/قاع الأمس + سحب", "rsi": "RSI ارتداد", "macd": "تقاطع MACD",
+    "bollinger": "اختراق بولينجر", "ema_9_21": "EMA 9/21", "ema_50_200": "EMA 50/200",
+    "supertrend": "Supertrend", "psar": "Parabolic SAR", "ao": "Awesome Oscillator",
+    "heikin": "Heikin-Ashi", "dual_thrust": "Dual Thrust", "vwap": "VWAP ارتداد",
+    "london": "اختراق نطاق آسيا/لندن",
+}
+
+
+def _cross_up_down(a: pd.Series, b):
+    prev_a, prev_b = a.shift(1), (b.shift(1) if isinstance(b, pd.Series) else b)
+    up = (a > b) & (prev_a <= prev_b)
+    dn = (a < b) & (prev_a >= prev_b)
+    return up.fillna(False).to_numpy(), dn.fillna(False).to_numpy()
+
+
+def _rsi(close: pd.Series, n: int = 14) -> pd.Series:
+    d = close.diff()
+    up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
+    dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
+    return 100 - 100 / (1 + up / dn.replace(0, np.nan))
+
+
+def _supertrend_dir(df: pd.DataFrame, n: int = 10, mult: float = 3.0) -> np.ndarray:
+    a = atr(df, n).to_numpy()
+    hl2 = ((df["high"] + df["low"]) / 2).to_numpy()
+    close = df["close"].to_numpy()
+    upper, lower = hl2 + mult * a, hl2 - mult * a
+    fu, fl = upper.copy(), lower.copy()
+    direction = np.zeros(len(df))
+    start = int(np.argmax(~np.isnan(a))) if np.any(~np.isnan(a)) else len(df)
+    for i in range(start + 1, len(df)):
+        fu[i] = upper[i] if (upper[i] < fu[i - 1] or close[i - 1] > fu[i - 1]) else fu[i - 1]
+        fl[i] = lower[i] if (lower[i] > fl[i - 1] or close[i - 1] < fl[i - 1]) else fl[i - 1]
+        if direction[i - 1] <= 0 and close[i] > fu[i]:
+            direction[i] = 1
+        elif direction[i - 1] >= 0 and close[i] < fl[i]:
+            direction[i] = -1
+        else:
+            direction[i] = direction[i - 1] if direction[i - 1] != 0 else (1 if close[i] > fl[i] else -1)
+    return direction
+
+
+def _psar_dir(df: pd.DataFrame, step: float = 0.02, max_step: float = 0.2) -> np.ndarray:
+    h, l = df["high"].to_numpy(), df["low"].to_numpy()
+    n = len(df)
+    trend = np.zeros(n)
+    if n < 3:
+        return trend
+    up, af, ep, sar = True, step, h[0], l[0]
+    for i in range(1, n):
+        sar = sar + af * (ep - sar)
+        if up:
+            sar = min(sar, l[i - 1], l[i - 2] if i >= 2 else l[i - 1])
+            if l[i] < sar:
+                up, sar, ep, af = False, ep, l[i], step
+            elif h[i] > ep:
+                ep, af = h[i], min(af + step, max_step)
+        else:
+            sar = max(sar, h[i - 1], h[i - 2] if i >= 2 else h[i - 1])
+            if h[i] > sar:
+                up, sar, ep, af = True, ep, h[i], step
+            elif l[i] < ep:
+                ep, af = l[i], min(af + step, max_step)
+        trend[i] = 1 if up else -1
+    return trend
+
+
+def _heikin_green(df: pd.DataFrame) -> np.ndarray:
+    o, h, l, c = (df[k].to_numpy() for k in ("open", "high", "low", "close"))
+    ha_c = (o + h + l + c) / 4
+    ha_o = np.zeros(len(df))
+    if len(df):
+        ha_o[0] = (o[0] + c[0]) / 2
+    for i in range(1, len(df)):
+        ha_o[i] = (ha_o[i - 1] + ha_c[i - 1]) / 2
+    return (ha_c > ha_o).astype(float)
+
+
+def _london_signals(df: pd.DataFrame):
+    """نطاق آسيا (00-06 UTC) ثم أول اختراق في 07-11 UTC، مرة واحدة يومياً."""
+    n = len(df)
+    long_m, short_m = np.zeros(n, bool), np.zeros(n, bool)
+    hours = df["open_time"].dt.hour.to_numpy()
+    days = df["open_time"].dt.date.to_numpy()
+    for day in np.unique(days):
+        idx = np.where(days == day)[0]
+        asia = idx[hours[idx] < 6]
+        london = idx[(hours[idx] >= 7) & (hours[idx] <= 11)]
+        if len(asia) == 0 or len(london) == 0:
+            continue
+        hi, lo = df["high"].to_numpy()[asia].max(), df["low"].to_numpy()[asia].min()
+        for j in london:
+            c = df["close"].iat[j]
+            if c > hi:
+                long_m[j] = True
+                break
+            if c < lo:
+                short_m[j] = True
+                break
+    return long_m, short_m
+
+
+def _rule_masks(rule: str, df: pd.DataFrame):
+    close = df["close"]
+    n = len(df)
+    if rule == "rsi":
+        r = _rsi(close, 14)
+        up, _ = _cross_up_down(r, 30.0)
+        _, dn = _cross_up_down(r, 70.0)
+        return up, dn
+    if rule == "macd":
+        macd = _ema(close, 12) - _ema(close, 26)
+        sig = _ema(macd, 9)
+        return _cross_up_down(macd, sig)
+    if rule == "bollinger":
+        mid = close.rolling(20).mean()
+        sd = close.rolling(20).std()
+        up_band, lo_band = mid + 2 * sd, mid - 2 * sd
+        up = ((close > up_band) & (close.shift(1) <= up_band.shift(1))).fillna(False).to_numpy()
+        dn = ((close < lo_band) & (close.shift(1) >= lo_band.shift(1))).fillna(False).to_numpy()
+        return up, dn
+    if rule == "ema_9_21":
+        return _cross_up_down(_ema(close, 9), _ema(close, 21))
+    if rule == "ema_50_200":
+        return _cross_up_down(_ema(close, 50), _ema(close, 200))
+    if rule == "supertrend":
+        d = _supertrend_dir(df)
+        prev = np.concatenate([[0], d[:-1]])
+        return (d == 1) & (prev == -1), (d == -1) & (prev == 1)
+    if rule == "psar":
+        d = _psar_dir(df)
+        prev = np.concatenate([[0], d[:-1]])
+        return (d == 1) & (prev == -1), (d == -1) & (prev == 1)
+    if rule == "ao":
+        med = (df["high"] + df["low"]) / 2
+        ao = med.rolling(5).mean() - med.rolling(34).mean()
+        return _cross_up_down(ao, 0.0)
+    if rule == "heikin":
+        g = _heikin_green(df)
+        prev = np.concatenate([[0.0], g[:-1]])
+        return (g == 1) & (prev == 0), (g == 0) & (prev == 1)
+    if rule == "dual_thrust":
+        hh, ll = df["high"].rolling(4).max(), df["low"].rolling(4).min()
+        hc, lc = close.rolling(4).max(), close.rolling(4).min()
+        rng = np.maximum(hh - lc, hc - ll).shift(1)
+        up_lvl = df["open"] + 0.5 * rng
+        dn_lvl = df["open"] - 0.5 * rng
+        return (close > up_lvl).fillna(False).to_numpy(), (close < dn_lvl).fillna(False).to_numpy()
+    if rule == "vwap":
+        tp = (df["high"] + df["low"] + close) / 3
+        vol = df["volume"]
+        vwap = (tp * vol).rolling(48).sum() / vol.rolling(48).sum().replace(0, np.nan)
+        a = atr(df, 14)
+        lo_b, up_b = vwap - a, vwap + a
+        dn = ((close < lo_b) & (close.shift(1) >= lo_b.shift(1))).fillna(False).to_numpy()
+        up = ((close > up_b) & (close.shift(1) <= up_b.shift(1))).fillna(False).to_numpy()
+        return up, dn
+    if rule == "london":
+        return _london_signals(df)
+    return np.zeros(n, bool), np.zeros(n, bool)
+
+
+def rule_signals(rule: str, df: pd.DataFrame, atr_stop: float, target_r: float) -> list:
+    """نفس صيغة إشارات sweep_run: دخول عند إغلاق الشمعة، وقف بمضاعف ATR، وهدف بنسبة R."""
+    long_m, short_m = _rule_masks(rule, df)
+    a = atr(df, 14).to_numpy()
+    closes = df["close"].to_numpy()
+    ms = ms_of(df)
+    ct = df["close_time"].to_numpy()
+    sigs = []
+    for i in range(len(df)):
+        if np.isnan(a[i]) or not (long_m[i] or short_m[i]):
+            continue
+        buy = bool(long_m[i]) and not bool(short_m[i])
+        entry = float(closes[i])
+        dist = float(a[i]) * atr_stop
+        if buy:
+            stop = entry - dist
+            risk = entry - stop
+            tp = entry + risk * target_r
+        else:
+            stop = entry + dist
+            risk = stop - entry
+            tp = entry - risk * target_r
+        if risk <= 0:
+            continue
+        sigs.append({"side": "buy" if buy else "sell", "close_ts": ct[i], "open_ms": ms[i],
+                     "entry": entry, "stop": float(stop), "target": float(tp), "risk": float(risk),
+                     "source": RULE_AR.get(rule, rule)})
+    return sigs
+
+
 # =====================================================================
 # الاختبار التاريخي والبحث التطوري
 # =====================================================================
 SPACE = {
+    "rule": RULES,
+    "atr_stop": [1.0, 1.5, 2.0],
     "atr_len": [7, 14, 21],
     "depth_mult": [0.05, 0.1, 0.2, 0.3, 0.5],
     "sl_buffer": [0.0, 0.1, 0.2, 0.3],
@@ -206,22 +412,34 @@ SPACE = {
     "tf": [1, 2, 4],
     "trend": [False, True],
 }
-BASELINE = {"atr_len": 14, "depth_mult": 0.2, "sl_buffer": 0.2, "target_r": 2.0, "tf": 1, "trend": False}
+BASELINE = {"rule": "sweep", "atr_stop": 1.5, "atr_len": 14, "depth_mult": 0.2, "sl_buffer": 0.2, "target_r": 2.0, "tf": 1, "trend": False}
 
 
 def key(genome: dict) -> str:
     return json.dumps(genome, sort_keys=True)
 
 
+def normalize(genome: dict) -> dict:
+    """يثبت المعاملات غير المستخدمة في كل عائلة، حتى لا تتكرر الجينات المتكافئة."""
+    g = dict(genome)
+    g.setdefault("rule", "sweep")
+    g.setdefault("atr_stop", 1.5)
+    if g["rule"] == "sweep":
+        g["atr_stop"] = 1.5
+    else:
+        g.update(atr_len=14, depth_mult=0.2, sl_buffer=0.2, trend=False)
+    return g
+
+
 def random_genome(rng: random.Random) -> dict:
-    return {k: rng.choice(v) for k, v in SPACE.items()}
+    return normalize({k: rng.choice(v) for k, v in SPACE.items()})
 
 
 def mutate(genome: dict, rng: random.Random) -> dict:
     child = dict(genome)
     for k in rng.sample(list(SPACE), k=rng.choice([1, 2])):
         child[k] = rng.choice(SPACE[k])
-    return child
+    return normalize(child)
 
 
 def ms_of(df: pd.DataFrame) -> list:
@@ -242,6 +460,15 @@ def resample(h1: pd.DataFrame, hours: int) -> pd.DataFrame:
 
 def signals_for(genome: dict, h1: pd.DataFrame, daily: pd.DataFrame):
     df = resample(h1, genome["tf"])
+    rule = genome.get("rule", "sweep")
+    if rule != "sweep":
+        sigs = rule_signals(rule, df, genome.get("atr_stop", 1.5), genome["target_r"])
+        last = df.iloc[-1]
+        a = atr(df, 14).iloc[-1]
+        latest = {"time": last["close_time"].isoformat(), "close": float(last["close"]),
+                  "atr": None if pd.isna(a) else float(a), "prev_day_high": None,
+                  "prev_day_low": None, "pending": "لا يوجد"}
+        return df, sigs, latest
     params = {"atr_len": genome["atr_len"], "depth_mult": genome["depth_mult"],
               "sl_buffer": genome["sl_buffer"], "target_r": genome["target_r"]}
     sigs, latest = sweep_run(df, daily, params)
@@ -982,6 +1209,8 @@ def in_session(asset: str, now=None) -> bool:
 
 
 def describe(g: dict) -> str:
+    if g.get("rule", "sweep") != "sweep":
+        return f"{RULE_AR.get(g['rule'], g['rule'])} | وقف {g.get('atr_stop')}×ATR | هدف {g['target_r']}R | إطار {g['tf']}H"
     return (f"ATR {g['atr_len']} | عمق {g['depth_mult']} | بفر وقف {g['sl_buffer']} | "
             f"هدف {g['target_r']}R | إطار {g['tf']}H | فلتر EMA200 {'نعم' if g['trend'] else 'لا'}")
 
@@ -1942,7 +2171,14 @@ const sgn = (v) => (v > 0 ? "up" : v < 0 ? "down" : "");
 const sideTxt = (s) => (String(s).toLowerCase() === "buy" ? '<span class="up">شراء</span>' : '<span class="down">بيع</span>');
 const MODE_AR = { paper: "ورقي", tickerall: "MT5 تجريبي", demo: "Binance Testnet" };
 const KIND_TAG = { open: "open", close: "close", warn: "warn", error: "error", evolve: "evolve", scan: "scan", info: "" };
-const describe = (g) => g ? `ATR ${g.atr_len} · عمق ${g.depth_mult} · بفر ${g.sl_buffer} · ${g.target_r}R · ${g.tf}H · EMA200 ${g.trend ? "✔" : "✘"}` : "";
+const RULE_AR = { sweep: "قمة/قاع الأمس + سحب", rsi: "RSI ارتداد", macd: "تقاطع MACD", bollinger: "اختراق بولينجر",
+  ema_9_21: "EMA 9/21", ema_50_200: "EMA 50/200", supertrend: "Supertrend", psar: "Parabolic SAR",
+  ao: "Awesome Oscillator", heikin: "Heikin-Ashi", dual_thrust: "Dual Thrust", vwap: "VWAP ارتداد", london: "اختراق نطاق آسيا/لندن" };
+const describe = (g) => {
+  if (!g) return "";
+  if (g.rule && g.rule !== "sweep") return `${RULE_AR[g.rule] || g.rule} · وقف ${g.atr_stop}×ATR · ${g.target_r}R · ${g.tf}H`;
+  return `ATR ${g.atr_len} · عمق ${g.depth_mult} · بفر ${g.sl_buffer} · ${g.target_r}R · ${g.tf}H · EMA200 ${g.trend ? "✔" : "✘"}`;
+};
 
 // ---------- admin password: remembered in this browser ----------
 const PW_KEY = "ma_admin_pw";
