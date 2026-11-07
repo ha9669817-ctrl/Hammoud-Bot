@@ -6,6 +6,7 @@ import json
 import math
 import os
 import random
+import resource
 import sqlite3
 import threading
 import time
@@ -1517,7 +1518,7 @@ def run_trading(send_alerts=True):
                     log_event("warn", e, asset)
                 if not res.get("opened") and not res["errors"]:
                     if not res["has_champion"]:
-                        log_event("info", "لا توجد استراتيجية معتمدة، التداول متوقف لهذا الأصل", asset)
+                        log_info_once(asset, "لا توجد استراتيجية معتمدة، التداول متوقف لهذا الأصل")
                     elif res.get("note"):
                         log_event("info", res["note"], asset)
                     else:
@@ -1526,6 +1527,10 @@ def run_trading(send_alerts=True):
                 traceback.print_exc()
                 live[asset] = {"error": str(exc), "updated": int(time.time())}
                 log_event("error", f"خطأ في الفحص: {str(exc)[:160]}", asset)
+                alert_once(f"err:{asset}", f"⚠️ خطأ متكرر في فحص {label}: {str(exc)[:160]}")
+        mem = _rss_mb()
+        if mem and mem > 400:
+            alert_once("mem", f"⚠️ ذاكرة الخادم وصلت {mem} ميغابايت (الحد المجاني نحو 512)", every=21600)
         engine["cycles"] += 1
         engine["last_run"] = int(time.time())
         engine.update(status="idle", started_at=None, current=None, message="بانتظار الفحص التالي")
@@ -1556,9 +1561,95 @@ def run_evolution_job(send_alerts=True):
         evolve_lock.release()
 
 
+_alert_last: dict = {}
+_info_last: dict = {}
+
+
+def alert_once(key, text, every=1800):
+    """تنبيه Telegram بحد زمني لكل مفتاح، حتى لا تُغرق القناة بالتكرار."""
+    now = time.time()
+    if now - _alert_last.get(key, 0) >= every:
+        _alert_last[key] = now
+        send(text)
+
+
+def log_info_once(asset, text):
+    """يسجل المعلومة فقط عند تغيّرها، لتجنب تكرارها في كل فحص."""
+    if _info_last.get(asset) != text:
+        _info_last[asset] = text
+        log_event("info", text, asset)
+
+
+def _rss_mb():
+    try:
+        return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+    except Exception:
+        return None
+
+
+def reconcile_with_broker():
+    """يقارن الصفقات المفتوحة محلياً بمراكز الوسيط ويسجل الفروقات دون تعديل تلقائي."""
+    if store.get_mode() != "tickerall" or not ta_creds(store):
+        return None
+    client = ta_client(store)
+    if client is None:
+        return None
+    try:
+        broker = client.positions() or []
+    except Exception as exc:
+        log_event("warn", f"تعذرت المطابقة مع الوسيط: {str(exc)[:120]}")
+        return None
+    tickets = {str(p.get("ticket") or p.get("id") or "") for p in broker if isinstance(p, dict)}
+    if broker and tickets == {""}:
+        log_event("warn", "المطابقة متوقفة: رد الوسيط لا يحتوي رقم التذكرة بالحقل المتوقع")
+        return None
+    local = [t for t in store.open_trades() if t.get("mode") == "tickerall"]
+    missing = [t for t in local if str(t.get("order_id") or "") not in tickets]
+    for t in missing:
+        log_event("warn", f"صفقة مفتوحة محلياً غير موجودة عند الوسيط (تذكرة {t.get('order_id')}), "
+                  "ربما أُغلقت بوقف أو هدف", t["asset"])
+    if not missing:
+        log_event("info", f"المطابقة مع الوسيط: {len(broker)} مركز، لا فروقات")
+    return {"broker": len(broker), "local": len(local), "missing_at_broker": len(missing)}
+
+
+def _keepalive_loop():
+    """يبقي جلسة الوسيط حية، ويعيد الاتصال عند الانقطاع."""
+    while True:
+        time.sleep(600)
+        if not ta_creds(store):
+            continue
+        try:
+            ta_client(store).account_info()
+        except Exception:
+            try:
+                ta_client(store).connect()
+                print("[tickerall] keep-alive: reconnected", flush=True)
+            except Exception as exc:
+                print(f"[tickerall] keep-alive failed: {type(exc).__name__}", flush=True)
+
+
+def maybe_daily_summary():
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    if now.hour < 21 or store.meta_get("last_summary_day") == today:
+        return
+    store.meta_set("last_summary_day", today)
+    closed = [t for t in store.closed_trades() if str(t.get("closed_utc") or "").startswith(today)]
+    pnl = sum((t.get("pnl_usd") or 0) for t in closed)
+    send(f"📊 ملخص اليوم {today}\n"
+         f"الرصيد المسجل: ${store.balance():,.2f}\n"
+         f"صفقات أُغلقت اليوم: {len(closed)} | الربح/الخسارة: ${pnl:,.2f}\n"
+         f"صفقات مفتوحة: {len(store.open_trades())}\n{DISCLAIMER}")
+
+
 def _scheduler():
     while True:
         run_trading()
+        try:
+            maybe_daily_summary()
+        except Exception as exc:
+            print(f"[summary] {exc}", flush=True)
         if time.time() - meta["last_evolve"] >= CONFIG["evolve_every_hours"] * 3600 and not evolve_lock.locked():
             threading.Thread(target=run_evolution_job, daemon=True).start()
         engine["next_run"] = int(time.time() + CONFIG["check_every_minutes"] * 60)
@@ -1577,6 +1668,10 @@ def ta_autoconnect():
         if info.get("balance") is not None:
             store.meta_set("ta_snapshot", {"balance": info.get("balance"), "equity": info.get("equity")})
         meta["ta_test"] = {"ok": True, "at": int(time.time()), "note": "اتصال تلقائي عند التشغيل"}
+        try:
+            reconcile_with_broker()
+        except Exception as exc:
+            print(f"[reconcile] {exc}", flush=True)
         print(f"[tickerall] auto-connected, balance={info.get('balance')} {info.get('currency')}", flush=True)
         if os.getenv("DEFAULT_MODE") == "tickerall":
             store.set_mode("tickerall")
@@ -1595,6 +1690,7 @@ meta["last_evolve"] = float(store.meta_get("last_evolve") or 0.0)
 if os.getenv("DISABLE_SCHEDULER") != "1":
     threading.Thread(target=ta_autoconnect, daemon=True).start()
     threading.Thread(target=_scheduler, daemon=True).start()
+    threading.Thread(target=_keepalive_loop, daemon=True).start()
 
 
 def _authorized() -> bool:
@@ -1690,7 +1786,7 @@ def _build_state() -> dict:
         "equity": equity,
         "evolutions": store.recent_evolutions(12),
         "engine": {**engine, "mode": store.get_mode(), "scan_minutes": CONFIG["check_every_minutes"],
-                   "busy": work_lock.locked(), "now": int(time.time())},
+                   "busy": work_lock.locked(), "now": int(time.time()), "peak_mb": _rss_mb()},
         "activity": list(activity)[:40],
     }
 
@@ -1927,6 +2023,23 @@ def run_now():
     return jsonify({"ok": True, "note": note})
 
 
+@app.get("/api/trades.csv")
+def trades_csv():
+    if not _authorized():
+        return _deny()
+    import csv
+    import io
+    cols = ["id", "asset", "side", "entry_at", "entry", "stop", "target", "r", "pnl_usd",
+            "status", "exit_at", "exit_price", "closed_utc", "mode", "order_id"]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(cols)
+    for t in store.closed_trades():
+        writer.writerow([t.get(c) for c in cols])
+    return Response(buf.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=trades.csv"})
+
+
 @app.get("/api/champions/export")
 def champions_export():
     if not _authorized():
@@ -2156,6 +2269,7 @@ INDEX_HTML = r'''
         <button id="btnRun" class="btn">فحص الآن</button>
         <button id="btnEvolve" class="btn btn-primary">تطوير</button>
         <button id="btnExport" class="btn">تصدير الاستراتيجيات</button>
+        <button id="btnCsv" class="btn">تصدير الصفقات CSV</button>
       </div>
     </header>
     <p id="msg" class="info" style="margin:0;padding:6px 22px;font-size:12px;min-height:18px"></p>
@@ -2696,6 +2810,15 @@ $("btnExport").onclick = async () => {
   const txt = JSON.stringify(await r.json(), null, 2);
   try { await navigator.clipboard.writeText(txt); msg("نُسخت الاستراتيجيات. الصقها في الملف seed/champions.json داخل GitHub ثم احفظ."); }
   catch (e) { msg("تعذر النسخ التلقائي، أعد المحاولة من متصفح آخر."); }
+};
+$("btnCsv").onclick = async () => {
+  const pwd = $("pw").value.trim();
+  if (!pwd) { $("pw").classList.add("bad"); $("pw").focus(); return msg("أدخل كلمة مرور الإدارة أولاً"); }
+  const r = await fetch("/api/trades.csv", { headers: { "X-Admin-Password": pwd } });
+  if (!r.ok) return msg("تعذر التصدير (تحقق من كلمة المرور)");
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement("a"); a.href = url; a.download = "trades.csv"; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 $("btnMarket").onclick = () => loadMarket(true);
 
