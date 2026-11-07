@@ -1122,9 +1122,12 @@ def _fmt(v):
 
 def run_trading(send_alerts=True):
     with work_lock:
-        engine.update(status="analyzing", message="جارٍ تحليل السوق والبحث عن فرص...")
+        engine.update(status="analyzing", started_at=int(time.time()), current=None,
+                      message="بدأ الفحص الآن")
         log_event("scan", "بدء فحص الأصول")
         for asset in store.get_assets():
+            label = ASSETS[asset]["label"]
+            engine.update(current=label, message=f"تحميل بيانات {label} وتحليلها...")
             try:
                 res = trading_cycle(asset, store, send_alerts=send_alerts)
                 live[asset] = {"price": res["price"], "latest": res["latest"],
@@ -1151,7 +1154,7 @@ def run_trading(send_alerts=True):
                 log_event("error", f"خطأ في الفحص: {str(exc)[:160]}", asset)
         engine["cycles"] += 1
         engine["last_run"] = int(time.time())
-        engine.update(status="idle", message="بانتظار الفحص التالي")
+        engine.update(status="idle", started_at=None, current=None, message="بانتظار الفحص التالي")
 
 
 def run_evolution_job(send_alerts=True):
@@ -1294,7 +1297,8 @@ def _build_state() -> dict:
         "closed": list(reversed(closed[-60:])),
         "equity": equity,
         "evolutions": store.recent_evolutions(12),
-        "engine": {**engine, "mode": store.get_mode(), "scan_minutes": CONFIG["check_every_minutes"]},
+        "engine": {**engine, "mode": store.get_mode(), "scan_minutes": CONFIG["check_every_minutes"],
+                   "busy": work_lock.locked(), "now": int(time.time())},
         "activity": list(activity)[:40],
     }
 
@@ -1475,8 +1479,14 @@ def broker_test():
 def run_now():
     if not _authorized():
         return _deny()
+    busy = work_lock.locked()
     threading.Thread(target=run_trading, daemon=True).start()
-    return jsonify({"ok": True, "note": "بدأ الفحص"})
+    if busy:
+        note = "المحرك مشغول بعملية أخرى، وسيبدأ الفحص فور انتهائها"
+    else:
+        note = "بدأ الفحص الآن"
+    log_event("scan", "طلب فحص يدوي: " + note)
+    return jsonify({"ok": True, "note": note})
 
 
 @app.post("/api/evolve")
@@ -2030,7 +2040,12 @@ function renderEngine(e, acts) {
   if (!e) return;
   $("radar").classList.toggle("on", e.status === "analyzing");
   $("engMsg").textContent = e.message;
-  $("engLast").textContent = e.last_run ? "آخر فحص " + new Date(e.last_run * 1000).toLocaleTimeString("ar-SA") : "لم يبدأ الفحص بعد";
+  if (e.status === "analyzing") {
+    const secs = e.started_at ? Math.max(0, e.now - e.started_at) : 0;
+    $("engLast").textContent = `فحص جارٍ منذ ${secs} ث${e.current ? " · " + e.current : ""}`;
+  } else {
+    $("engLast").textContent = e.last_run ? "آخر فحص مكتمل " + new Date(e.last_run * 1000).toLocaleTimeString("ar-SA") : "لم يكتمل أي فحص بعد";
+  }
   $("engCycles").textContent = e.cycles;
   $("engMode").textContent = MODE_AR[e.mode] || e.mode;
   nextRunAt = e.next_run ? e.next_run * 1000 : null;
