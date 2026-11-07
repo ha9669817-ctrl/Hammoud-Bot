@@ -2310,7 +2310,7 @@ function renderState(s) {
 }
 
 function renderAccount(a) {
-  $("acctBalance").textContent = "$" + num(a.balance);
+  $("acctBalance").textContent = a.source === "tickerall-pending" ? "—" : "$" + num(a.balance);
   $("acctSub").textContent = a.source === "tickerall" ? "رصيد الحساب التجريبي على الوسيط · مباشر"
     : a.source === "tickerall-pending" ? "بانتظار أول قراءة من الوسيط"
     : "ورقي · البداية $" + num(a.start, 0);
