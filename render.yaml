@@ -15,3 +15,13 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+      - key: TICKERALL_API_KEY
+        sync: false
+      - key: MT5_SERVER
+        sync: false
+      - key: MT5_ACCOUNT_ID
+        sync: false
+      - key: MT5_PASSWORD
+        sync: false
+      - key: DEFAULT_MODE
+        value: paper

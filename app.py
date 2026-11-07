@@ -865,8 +865,24 @@ class TickerAllClient:
         return 0.0
 
 
+TA_ENV_KEYS = ("TICKERALL_API_KEY", "MT5_SERVER", "MT5_ACCOUNT_ID", "MT5_PASSWORD")
+
+
+def ta_env_creds():
+    """Credentials from Render environment variables (never stored in code)."""
+    vals = {k: (os.getenv(k) or "").strip() for k in TA_ENV_KEYS}
+    if not all(vals.values()) or not vals["MT5_ACCOUNT_ID"].isdigit():
+        return None
+    return {"api_key": vals["TICKERALL_API_KEY"], "login": vals["MT5_ACCOUNT_ID"],
+            "server": vals["MT5_SERVER"], "password": vals["MT5_PASSWORD"],
+            "symbols": {}, "source": "env"}
+
+
 def ta_creds(store):
-    return store.meta_get("tickerall")
+    saved = store.meta_get("tickerall")
+    if saved:
+        return {**saved, "source": "site"}
+    return ta_env_creds()
 
 
 def ta_client(store):
@@ -1120,7 +1136,29 @@ def _scheduler():
         time.sleep(CONFIG["check_every_minutes"] * 60)
 
 
+def ta_autoconnect():
+    """At startup: connect TickerAll using saved or environment credentials, then apply DEFAULT_MODE."""
+    try:
+        if not ta_creds(store):
+            print("[tickerall] no credentials found; skipped auto-connect", flush=True)
+            return
+        client = ta_client(store)
+        client.connect()
+        info = client.account_info()
+        meta["ta_test"] = {"ok": True, "at": int(time.time()), "note": "اتصال تلقائي عند التشغيل"}
+        print(f"[tickerall] auto-connected, balance={info.get('balance')} {info.get('currency')}", flush=True)
+        if os.getenv("DEFAULT_MODE") == "tickerall":
+            store.set_mode("tickerall")
+    except TickerAllError as exc:
+        meta["ta_test"] = {"ok": False, "error": str(exc)[:200], "at": int(time.time())}
+        print(f"[tickerall] auto-connect failed: {exc}", flush=True)
+    except Exception as exc:
+        meta["ta_test"] = {"ok": False, "error": "فشل الاتصال التلقائي", "at": int(time.time())}
+        print(f"[tickerall] auto-connect error: {type(exc).__name__}", flush=True)
+
+
 if os.getenv("DISABLE_SCHEDULER") != "1":
+    threading.Thread(target=ta_autoconnect, daemon=True).start()
     threading.Thread(target=_scheduler, daemon=True).start()
 
 
@@ -1161,6 +1199,7 @@ def _settings() -> dict:
                  "masked": _mask(creds["api_key"]) if creds else None},
         "tickerall": {
             "present": ta is not None,
+            "source": ta.get("source") if ta else None,
             "api_key_masked": _mask(ta["api_key"]) if ta else None,
             "login_masked": ("••••" + ta["login"][-3:]) if ta else None,
             "server": ta["server"] if ta else None,
@@ -1401,155 +1440,182 @@ INDEX_HTML = r'''<!doctype html>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
-  :root { --amber:#fbbf24; --emerald:#34d399; --rose:#fb7185; --fuchsia:#e879f9; --sky:#38bdf8; }
   body {
     background:
       radial-gradient(1100px 620px at 8% -12%, rgba(251,191,36,.10), transparent 60%),
       radial-gradient(900px 560px at 108% 2%, rgba(232,121,249,.12), transparent 55%),
-      radial-gradient(800px 500px at 50% 110%, rgba(56,189,248,.08), transparent 60%),
       #020617;
     background-attachment: fixed;
   }
-  .card {
-    background: linear-gradient(180deg, rgba(15,23,42,.82), rgba(2,6,23,.86));
-    border: 1px solid rgba(148,163,184,.12);
-    border-radius: 1.25rem;
-    backdrop-filter: blur(10px);
-    box-shadow: 0 18px 50px -20px rgba(0,0,0,.7);
-  }
-  .glow-amber { box-shadow: 0 0 46px -10px rgba(251,191,36,.45), 0 18px 50px -20px rgba(0,0,0,.7); }
-  .glow-emerald { box-shadow: 0 0 46px -10px rgba(52,211,153,.45), 0 18px 50px -20px rgba(0,0,0,.7); }
-  .glow-rose { box-shadow: 0 0 46px -10px rgba(251,113,133,.45), 0 18px 50px -20px rgba(0,0,0,.7); }
-  .glow-fuchsia { box-shadow: 0 0 46px -10px rgba(232,121,249,.45), 0 18px 50px -20px rgba(0,0,0,.7); }
-  .glow-sky { box-shadow: 0 0 46px -10px rgba(56,189,248,.45), 0 18px 50px -20px rgba(0,0,0,.7); }
-  .title-grad {
-    background: linear-gradient(90deg, var(--amber), var(--fuchsia), var(--sky));
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-  }
-  .dot { width:9px; height:9px; border-radius:9999px; background: var(--emerald);
-         box-shadow: 0 0 12px var(--emerald); animation: pulse 2s ease-in-out infinite; }
+  .card { background: linear-gradient(180deg, rgba(15,23,42,.82), rgba(2,6,23,.86));
+          border: 1px solid rgba(148,163,184,.12); border-radius: 1.1rem;
+          box-shadow: 0 18px 50px -20px rgba(0,0,0,.7); }
+  .glow-amber { box-shadow: 0 0 40px -12px rgba(251,191,36,.40); }
+  .glow-emerald { box-shadow: 0 0 40px -12px rgba(52,211,153,.40); }
+  .glow-rose { box-shadow: 0 0 40px -12px rgba(251,113,133,.40); }
+  .glow-fuchsia { box-shadow: 0 0 40px -12px rgba(232,121,249,.40); }
+  .glow-sky { box-shadow: 0 0 40px -12px rgba(56,189,248,.40); }
+  .title-grad { background: linear-gradient(90deg,#fbbf24,#e879f9,#38bdf8);
+                -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .dot { width:9px; height:9px; border-radius:9999px; background:#34d399; box-shadow:0 0 12px #34d399; animation: pulse 2s ease-in-out infinite; }
   .dot.off { background:#64748b; box-shadow:none; animation:none; }
-  @keyframes pulse { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.45; transform:scale(.8);} }
-  .btn { border-radius: .75rem; padding:.55rem 1rem; font-size:.875rem; font-weight:600; transition: all .2s; border:1px solid rgba(148,163,184,.15); background: rgba(30,41,59,.7); }
-  .btn:hover { background: rgba(51,65,85,.9); transform: translateY(-1px); }
-  .btn-primary { background: linear-gradient(90deg, #f59e0b, #d946ef); color:#0f172a; border:none; }
-  .btn-primary:hover { filter: brightness(1.08); }
-  .btn-danger { background: rgba(127,29,29,.6); border-color: rgba(251,113,133,.25); }
-  .inp { background: rgba(2,6,23,.7); border:1px solid rgba(148,163,184,.18); border-radius:.75rem; padding:.55rem .75rem; font-size:.875rem; width:100%; outline:none; }
-  .inp:focus { border-color: rgba(251,191,36,.6); box-shadow: 0 0 0 3px rgba(251,191,36,.15); }
-  .kpi-num { font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
-  .badge { font-size:.7rem; border-radius:9999px; padding:.15rem .6rem; border:1px solid; }
-  .tbl th { color:#94a3b8; font-weight:500; font-size:.75rem; padding:.5rem; text-align:right; }
-  .tbl td { padding:.6rem .5rem; border-top:1px solid rgba(148,163,184,.08); font-size:.85rem; }
-  .bar { height: 6px; border-radius: 9999px; background: rgba(148,163,184,.15); overflow:hidden; }
-  .bar > span { display:block; height:100%; border-radius:9999px; background: linear-gradient(90deg,#34d399,#38bdf8); }
+  @keyframes pulse { 0%,100% {opacity:1} 50% {opacity:.4} }
+  .btn { border-radius:.7rem; padding:.5rem .9rem; font-size:.85rem; font-weight:600; transition:.2s; border:1px solid rgba(148,163,184,.15); background:rgba(30,41,59,.7); white-space:nowrap; }
+  .btn:hover { background:rgba(51,65,85,.9); }
+  .btn-primary { background:linear-gradient(90deg,#f59e0b,#d946ef); color:#0f172a; border:none; }
+  .btn-primary:hover { filter:brightness(1.08); }
+  .btn-danger { background:rgba(127,29,29,.55); border-color:rgba(251,113,133,.25); }
+  .inp { background:rgba(2,6,23,.7); border:1px solid rgba(148,163,184,.18); border-radius:.7rem; padding:.5rem .7rem; font-size:.85rem; width:100%; outline:none; }
+  .inp:focus { border-color:rgba(251,191,36,.6); box-shadow:0 0 0 3px rgba(251,191,36,.12); }
+  .inp.bad { border-color:rgba(251,113,133,.7); }
+  .tab-btn { padding:.5rem 1rem; border-radius:.7rem; font-size:.85rem; font-weight:600; color:#94a3b8; border:1px solid transparent; }
+  .tab-btn.active { color:#0f172a; background:linear-gradient(90deg,#fbbf24,#e879f9); }
+  .badge { font-size:.7rem; border-radius:9999px; padding:.15rem .6rem; border:1px solid; white-space:nowrap; }
+  .tbl th { color:#94a3b8; font-weight:500; font-size:.75rem; padding:.45rem; text-align:right; }
+  .tbl td { padding:.5rem .45rem; border-top:1px solid rgba(148,163,184,.08); font-size:.82rem; }
+  .bar { height:6px; border-radius:9999px; background:rgba(148,163,184,.15); overflow:hidden; }
+  .bar > span { display:block; height:100%; border-radius:9999px; background:linear-gradient(90deg,#34d399,#38bdf8); }
+  summary { cursor:pointer; list-style:none; }
+  summary::-webkit-details-marker { display:none; }
 </style>
 </head>
 <body class="text-slate-100 min-h-screen font-sans antialiased">
-<div class="max-w-7xl mx-auto p-4 md:p-8 space-y-6">
+<div class="max-w-7xl mx-auto p-3 md:p-6 space-y-5">
 
   <!-- Header -->
-  <header class="card p-5 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-5">
-    <div class="flex items-center gap-4">
-      <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-400 to-fuchsia-500 flex items-center justify-center text-2xl shadow-lg">🧬</div>
+  <header class="card p-4 md:p-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <div class="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-400 to-fuchsia-500 flex items-center justify-center text-xl">🧬</div>
       <div>
-        <h1 class="text-2xl md:text-3xl font-extrabold title-grad">مركز التحليل الذاتي</h1>
-        <p class="text-slate-400 text-sm flex items-center gap-2">
-          <span id="liveDot" class="dot"></span>
-          <span id="liveText">جارٍ الاتصال...</span>
+        <h1 class="text-xl md:text-2xl font-extrabold title-grad">مركز التحليل الذاتي</h1>
+        <p class="text-slate-400 text-xs flex items-center gap-2 mt-0.5">
+          <span id="liveDot" class="dot"></span><span id="liveText">جارٍ الاتصال...</span>
         </p>
       </div>
     </div>
-    <div class="flex flex-col sm:flex-row gap-2">
-      <input id="pw" type="password" placeholder="كلمة المرور" class="inp sm:w-44">
-      <select id="scope" class="inp sm:w-56">
+    <div class="flex flex-col sm:flex-row gap-2 items-stretch">
+      <input id="pw" type="password" placeholder="كلمة مرور الإدارة" autocomplete="current-password" class="inp sm:w-52">
+      <select id="scope" class="inp sm:w-44">
         <option value="all">الذهب + البيتكوين</option>
         <option value="XAUUSD">الذهب فقط</option>
         <option value="BTCUSDT">البيتكوين فقط</option>
       </select>
       <div class="flex gap-2">
         <button id="btnScope" class="btn">حفظ الأصول</button>
-        <button id="btnRun" class="btn">فحص الآن</button>
+        <button id="btnRun" class="btn">فحص</button>
         <button id="btnEvolve" class="btn btn-primary">🧬 تطوير</button>
       </div>
     </div>
   </header>
-  <p id="msg" class="text-sm text-amber-200 min-h-[1.25rem] px-2"></p>
+  <p id="msg" class="text-xs text-amber-200 min-h-[1rem] px-2"></p>
 
-  <!-- KPIs -->
-  <section class="grid grid-cols-2 xl:grid-cols-4 gap-4" id="kpis"></section>
+  <!-- Tabs -->
+  <nav class="flex gap-2 overflow-x-auto pb-1">
+    <button class="tab-btn active" data-tab="overview">الرئيسية</button>
+    <button class="tab-btn" data-tab="brokers">الوسطاء والإعدادات</button>
+    <button class="tab-btn" data-tab="research">التطوير والسجل</button>
+  </nav>
 
-  <!-- Equity -->
-  <section class="card glow-fuchsia p-5">
-    <div class="flex items-center justify-between mb-3">
-      <h2 class="font-bold text-lg">منحنى الرصيد</h2>
-      <span id="equityMeta" class="text-xs text-slate-400"></span>
+  <!-- ============ Tab: overview ============ -->
+  <section data-pane="overview" class="space-y-5">
+    <div id="kpis" class="grid grid-cols-2 xl:grid-cols-4 gap-3"></div>
+
+    <div class="card glow-fuchsia p-4 md:p-5">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="font-bold">منحنى الرصيد</h2>
+        <span id="equityMeta" class="text-xs text-slate-400"></span>
+      </div>
+      <div class="relative h-64"><canvas id="equity"></canvas></div>
+      <p id="equityEmpty" class="text-slate-500 text-sm text-center py-8 hidden">لا توجد صفقات مغلقة بعد.</p>
     </div>
-    <div class="relative h-72"><canvas id="equity"></canvas></div>
-    <p id="equityEmpty" class="text-slate-500 text-sm text-center py-10 hidden">لا توجد صفقات مغلقة بعد. سيظهر المنحنى عند إغلاق أول صفقة.</p>
+
+    <div id="assets" class="grid gap-4 lg:grid-cols-2"></div>
+
+    <div class="grid gap-4 xl:grid-cols-2">
+      <div class="card glow-sky p-4 md:p-5">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="font-bold">الصفقات المفتوحة</h2>
+          <span id="openCount" class="badge border-sky-500/40 text-sky-300">0</span>
+        </div>
+        <div class="overflow-x-auto"><table class="w-full tbl">
+          <thead><tr><th>الأصل</th><th>الاتجاه</th><th>الدخول</th><th>الوقف</th><th>الهدف</th><th>الوضع</th></tr></thead>
+          <tbody id="openRows"></tbody>
+        </table></div>
+        <div id="unmanagedBox" class="mt-4 hidden">
+          <div class="text-xs font-semibold text-amber-300 mb-2">مراكز على المنصة غير مُدارة من النظام</div>
+          <div class="overflow-x-auto"><table class="w-full tbl">
+            <thead><tr><th>الرمز</th><th>الاتجاه</th><th>الحجم</th><th>الربح</th><th>الوقف</th><th>الهدف</th></tr></thead>
+            <tbody id="unmanagedRows"></tbody>
+          </table></div>
+        </div>
+      </div>
+      <div class="card p-4 md:p-5">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="font-bold">الصفقات المغلقة</h2>
+          <span class="text-xs text-slate-400">آخر 60</span>
+        </div>
+        <div class="overflow-auto max-h-96"><table class="w-full tbl">
+          <thead class="sticky top-0 bg-slate-950"><tr><th>الأصل</th><th>الاتجاه</th><th>R</th><th>الربح</th><th>الإغلاق</th></tr></thead>
+          <tbody id="closedRows"></tbody>
+        </table></div>
+      </div>
+    </div>
   </section>
 
-  <!-- Assets -->
-  <section id="assets" class="grid gap-4 lg:grid-cols-2"></section>
+  <!-- ============ Tab: brokers ============ -->
+  <section data-pane="brokers" class="hidden space-y-5">
 
-  <!-- Broker settings -->
-  <section class="card p-5 space-y-6">
-    <div class="flex items-center justify-between">
-      <h2 class="font-bold text-lg">⚙️ إعدادات الوسيط</h2>
-      <span class="text-xs text-slate-400">الحفظ يتطلب كلمة المرور أعلاه</span>
-    </div>
-
-    <!-- Modes -->
-    <div>
-      <div class="text-sm text-slate-300 mb-2">وضع التنفيذ</div>
-      <div id="modes" class="grid gap-3 md:grid-cols-4"></div>
-      <div class="mt-3 flex flex-wrap items-center gap-3">
+    <div class="card p-4 md:p-5 space-y-4">
+      <div>
+        <h2 class="font-bold">وضع التنفيذ</h2>
+        <p class="text-xs text-slate-400">اختر الوضع ثم اضغط تطبيق. الحقيقي غير مفعّل في هذه النسخة.</p>
+      </div>
+      <div id="modes" class="grid gap-2 md:grid-cols-4"></div>
+      <div class="flex flex-wrap items-center gap-3">
         <button id="btnSetMode" class="btn btn-primary">تطبيق الوضع المختار</button>
-        <span id="modeOut" class="text-sm text-slate-300"></span>
+        <span id="modeOut" class="text-xs text-slate-300"></span>
       </div>
     </div>
 
-    <!-- TickerAll -->
-    <div class="rounded-2xl border border-slate-800 p-4 space-y-3">
+    <div class="card p-4 md:p-5 space-y-4 glow-amber">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div class="font-semibold">TickerAll · حساب MT5 تجريبي (Exness Demo)</div>
-          <div class="text-xs text-slate-400">الوقف والهدف يُحملان على جهة الوسيط. الحسابات الحقيقية مرفوضة.</div>
+          <h2 class="font-bold">TickerAll · MT5 تجريبي (Exness Demo)</h2>
+          <p class="text-xs text-slate-400">الوقف والهدف يُحملان على جهة الوسيط. الحسابات الحقيقية مرفوضة.</p>
         </div>
         <span id="taBadge" class="badge border-slate-600 text-slate-300">غير مرتبط</span>
       </div>
-      <div class="grid gap-3 md:grid-cols-3">
-        <label class="space-y-1"><span class="text-xs text-slate-400">API Key (cf_api_…)</span>
-          <input id="taKey" type="text" autocomplete="off" spellcheck="false" class="inp" placeholder="اتركه فارغاً للإبقاء على الحالي"></label>
-        <label class="space-y-1"><span class="text-xs text-slate-400">رقم الحساب</span>
+
+      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <label class="space-y-1"><span class="text-xs text-slate-400">API Key</span>
+          <input id="taKey" type="text" autocomplete="off" spellcheck="false" class="inp" placeholder="cf_api_…"></label>
+        <label class="space-y-1"><span class="text-xs text-slate-400">رقم الحساب التجريبي</span>
           <input id="taLogin" type="text" inputmode="numeric" autocomplete="off" class="inp"></label>
         <label class="space-y-1"><span class="text-xs text-slate-400">السيرفر</span>
           <input id="taServer" type="text" autocomplete="off" class="inp" placeholder="Exness-MT5Trial16"></label>
-        <label class="space-y-1"><span class="text-xs text-slate-400">كلمة مرور الحساب</span>
-          <input id="taPass" type="password" autocomplete="new-password" class="inp" placeholder="اتركه فارغاً للإبقاء على الحالية"></label>
+        <label class="space-y-1"><span class="text-xs text-slate-400">كلمة مرور الحساب التجريبي</span>
+          <input id="taPass" type="password" autocomplete="new-password" class="inp"></label>
         <label class="space-y-1"><span class="text-xs text-slate-400">رمز الذهب لدى الوسيط</span>
           <input id="taSymGold" type="text" class="inp" value="XAUUSD"></label>
         <label class="space-y-1"><span class="text-xs text-slate-400">رمز البيتكوين لدى الوسيط</span>
           <input id="taSymBtc" type="text" class="inp" value="BTCUSD"></label>
       </div>
+      <p class="text-[11px] text-slate-500">ملاحظة: الحقول أعلاه لحساب المنصة. كلمة مرور الإدارة في الأعلى حقل منفصل يحمي الحفظ.</p>
+
       <div class="flex flex-wrap gap-2">
-        <button id="btnSaveTa" class="btn btn-primary">حفظ بيانات TickerAll</button>
+        <button id="btnSaveTa" class="btn btn-primary">حفظ</button>
         <button id="btnTestTa" class="btn">اتصال واختبار الرموز</button>
         <button id="btnClearTa" class="btn btn-danger">حذف</button>
       </div>
-      <p id="taOut" class="text-sm text-slate-300 whitespace-pre-line"></p>
+      <p id="taOut" class="text-xs text-slate-300 whitespace-pre-line"></p>
     </div>
 
-    <!-- Binance -->
-    <div class="rounded-2xl border border-slate-800 p-4 space-y-3">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <div class="font-semibold">Binance Testnet · تجريبي للبيتكوين</div>
-          <div class="text-xs text-slate-400">أموال وهمية. الفيوتشرز يدعم البيع، والسبوت للشراء فقط.</div>
-        </div>
+    <details class="card p-4 md:p-5">
+      <summary class="flex items-center justify-between">
+        <span class="font-bold">Binance Testnet <span class="text-xs text-slate-400 font-normal">· للبيتكوين، أموال وهمية</span></span>
         <span id="keyStatus" class="text-xs text-slate-400"></span>
-      </div>
-      <div class="grid gap-3 md:grid-cols-4">
+      </summary>
+      <div class="grid gap-3 md:grid-cols-4 mt-4">
         <label class="space-y-1"><span class="text-xs text-slate-400">نوع السوق</span>
           <select id="market" class="inp"></select></label>
         <label class="space-y-1"><span class="text-xs text-slate-400">API Key</span>
@@ -1562,57 +1628,26 @@ INDEX_HTML = r'''<!doctype html>
           <button id="btnClearKeys" class="btn btn-danger">حذف</button>
         </div>
       </div>
-      <p id="testOut" class="text-sm text-slate-300"></p>
-    </div>
+      <p id="testOut" class="text-xs text-slate-300 mt-3"></p>
+    </details>
   </section>
 
-  <!-- Open + closed -->
-  <section class="grid gap-4 xl:grid-cols-2">
-    <div class="card p-5 glow-sky">
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="font-bold text-lg">الصفقات المفتوحة</h2>
-        <span id="openCount" class="badge border-sky-500/40 text-sky-300">0</span>
-      </div>
-      <div class="overflow-x-auto"><table class="w-full tbl">
-        <thead><tr><th>الأصل</th><th>الاتجاه</th><th>الدخول</th><th>الوقف</th><th>الهدف</th><th>الوضع</th></tr></thead>
-        <tbody id="openRows"></tbody>
-      </table></div>
-      <div id="unmanagedBox" class="mt-4 hidden">
-        <div class="text-sm font-semibold text-amber-300 mb-2">مراكز على المنصة غير مُدارة من النظام</div>
-        <div class="overflow-x-auto"><table class="w-full tbl">
-          <thead><tr><th>الرمز</th><th>الاتجاه</th><th>الحجم</th><th>الربح</th><th>الوقف</th><th>الهدف</th></tr></thead>
-          <tbody id="unmanagedRows"></tbody>
-        </table></div>
-      </div>
-    </div>
-    <div class="card p-5">
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="font-bold text-lg">الصفقات المغلقة</h2>
-        <span class="text-xs text-slate-400">آخر 60</span>
-      </div>
-      <div class="overflow-auto max-h-96"><table class="w-full tbl">
-        <thead class="sticky top-0 bg-slate-950"><tr><th>الأصل</th><th>الاتجاه</th><th>النتيجة R</th><th>الربح/الخسارة</th><th>الإغلاق</th></tr></thead>
-        <tbody id="closedRows"></tbody>
-      </table></div>
-    </div>
-  </section>
-
-  <!-- Leaderboard + evolution -->
-  <section class="grid gap-4 xl:grid-cols-3">
-    <div class="card p-5 xl:col-span-2">
-      <h2 class="font-bold text-lg mb-3">لوحة المتصدرين</h2>
+  <!-- ============ Tab: research ============ -->
+  <section data-pane="research" class="hidden grid gap-4 xl:grid-cols-3">
+    <div class="card p-4 md:p-5 xl:col-span-2">
+      <h2 class="font-bold mb-2">لوحة المتصدرين</h2>
       <div class="overflow-x-auto"><table class="w-full tbl">
         <thead><tr><th>الأصل</th><th>القواعد</th><th>نجاح%</th><th>PF</th><th>تراجع R</th><th>الدرجة</th></tr></thead>
         <tbody id="boardRows"></tbody>
       </table></div>
     </div>
-    <div class="card p-5">
-      <h2 class="font-bold text-lg mb-3">سجل التطوير</h2>
+    <div class="card p-4 md:p-5">
+      <h2 class="font-bold mb-2">سجل التطوير</h2>
       <ul id="evoLog" class="space-y-2 text-sm max-h-96 overflow-y-auto"></ul>
     </div>
   </section>
 
-  <footer class="text-xs text-slate-500 leading-relaxed px-2">
+  <footer class="text-[11px] text-slate-500 leading-relaxed px-2">
     ⚠️ نظام تعليمي يعمل بتنفيذ ورقي أو على حسابات تجريبية فقط. نتائج الاختبار التاريخي لا تضمن أرباحاً مستقبلية، والبحث التطوري قد يُفرط في التخصيص رغم التحقق خارج العينة.
   </footer>
 </div>
@@ -1626,6 +1661,20 @@ const tone = (v) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "tex
 const sideTxt = (s) => (String(s).toLowerCase() === "buy" ? '<span class="text-emerald-400">شراء</span>' : '<span class="text-rose-400">بيع</span>');
 const modeTxt = (m) => ({paper: "ورقي", demo: "Binance", tickerall: "MT5"}[m] || esc(m || "—"));
 const describe = (g) => g ? `ATR ${g.atr_len} · عمق ${g.depth_mult} · بفر ${g.sl_buffer} · ${g.target_r}R · ${g.tf}H · EMA200 ${g.trend ? "✔" : "✘"}` : "";
+
+// ---------- admin password: entered once per browser session ----------
+const PW_KEY = "ma_admin_pw";
+try { $("pw").value = localStorage.getItem(PW_KEY) || ""; } catch (e) {}
+$("pw").addEventListener("input", () => { try { localStorage.setItem(PW_KEY, $("pw").value); } catch (e) {} });
+
+// ---------- tabs ----------
+function showTab(name) {
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll("[data-pane]").forEach(p => p.classList.toggle("hidden", p.dataset.pane !== name));
+  try { localStorage.setItem("ma_tab", name); } catch (e) {}
+}
+document.querySelectorAll(".tab-btn").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+showTab((() => { try { return localStorage.getItem("ma_tab") || "overview"; } catch (e) { return "overview"; } })());
 
 let chart = null;
 let lastState = null;
@@ -1647,10 +1696,10 @@ async function load() {
 }
 
 function kpi(label, value, sub, glow, extra = "") {
-  return `<div class="card p-5 ${glow}">
-    <div class="text-xs text-slate-400">${label}</div>
-    <div class="kpi-num text-3xl font-extrabold mt-2">${value}</div>
-    <div class="text-xs text-slate-500 mt-2">${sub}</div>${extra}
+  return `<div class="card p-4 ${glow}">
+    <div class="text-[11px] text-slate-400">${label}</div>
+    <div class="kpi-num text-2xl md:text-3xl font-extrabold mt-1">${value}</div>
+    <div class="text-[11px] text-slate-500 mt-1">${sub}</div>${extra}
   </div>`;
 }
 
@@ -1658,20 +1707,18 @@ function render(s) {
   const a = s.account;
   const barW = Math.max(0, Math.min(100, a.win_rate || 0));
   $("kpis").innerHTML = [
-    kpi("الرصيد الورقي", `$${num(a.balance)}`, `البداية $${num(a.start, 0)}`, "glow-amber"),
+    kpi("الرصيد", `$${num(a.balance)}`, `البداية $${num(a.start, 0)}`, "glow-amber"),
     kpi("العائد", `<span class="${tone(a.return_pct)}">${num(a.return_pct)}%</span>`, `${a.trades} صفقة مغلقة`, a.return_pct >= 0 ? "glow-emerald" : "glow-rose"),
-    kpi("نسبة النجاح", `${num(a.win_rate, 1)}%`, "من الصفقات المغلقة", "glow-sky",
-        `<div class="bar mt-3"><span style="width:${barW}%"></span></div>`),
-    kpi("معامل الربح", num(a.profit_factor), "إجمالي الأرباح ÷ الخسائر", "glow-fuchsia"),
+    kpi("نسبة النجاح", `${num(a.win_rate, 1)}%`, "من الصفقات المغلقة", "glow-sky", `<div class="bar mt-2"><span style="width:${barW}%"></span></div>`),
+    kpi("معامل الربح", num(a.profit_factor), "الأرباح ÷ الخسائر", "glow-fuchsia"),
   ].join("");
-
   drawEquity(s.equity, a.start);
   renderAssets(s.assets);
   renderOpen(s);
   renderClosed(s.closed);
   renderBoard(s.assets);
   renderEvolutions(s.evolutions);
-  renderSettings(s.settings, s.config);
+  renderSettings(s.settings);
   $("openCount").textContent = Object.values(s.assets).reduce((n, v) => n + (v.open || []).length, 0);
 }
 
@@ -1689,26 +1736,23 @@ function renderAssets(assets) {
         <div class="text-slate-300">${esc(describe(champ.genome))}</div>
         <div class="text-slate-400">تحقق: نجاح ${num(champ.result.val.win_rate,1)}% · PF ${num(champ.result.val.profit_factor)} · تراجع ${num(champ.result.val.max_dd_r)}R · ${champ.result.val.trades} صفقة</div>
         <div class="text-slate-500">منذ ${dt(champ.since)}</div>
-      </div>` : `<div class="rounded-xl bg-rose-950/40 border border-rose-900 p-3 text-xs text-rose-300">لا توجد استراتيجية معتمدة. التداول متوقف لهذا الأصل حتى يجد التطوير قاعدة ناجحة.</div>`;
-    const glow = champ ? "glow-amber" : "";
-    return `<div class="card p-5 space-y-4 ${glow}">
+      </div>` : `<div class="rounded-xl bg-rose-950/40 border border-rose-900 p-3 text-xs text-rose-300">لا توجد استراتيجية معتمدة، التداول متوقف لهذا الأصل.</div>`;
+    return `<div class="card p-4 md:p-5 space-y-3 ${champ ? "glow-amber" : ""}">
       <div class="flex items-start justify-between gap-3">
         <div>
-          <h3 class="font-bold text-lg text-amber-300">${esc(v.label)}</h3>
+          <h3 class="font-bold text-amber-300">${esc(v.label)}</h3>
           <div class="mt-1">${sess}</div>
         </div>
         <div class="text-left">
-          <div class="kpi-num text-3xl font-extrabold">${num(v.live && v.live.price)}</div>
-          <div class="text-[11px] text-slate-500 text-left">آخر إغلاق H1</div>
+          <div class="kpi-num text-2xl font-extrabold">${num(v.live && v.live.price)}</div>
+          <div class="text-[10px] text-slate-500">آخر إغلاق H1</div>
         </div>
       </div>
-      ${err}
-      ${champBlock}
+      ${err}${champBlock}
       <div class="grid grid-cols-2 gap-2 text-xs text-slate-300">
         <div class="rounded-lg bg-slate-950/50 p-2">قمة الأمس: <b>${num(L.prev_day_high)}</b></div>
         <div class="rounded-lg bg-slate-950/50 p-2">قاع الأمس: <b>${num(L.prev_day_low)}</b></div>
         <div class="col-span-2 rounded-lg bg-slate-950/50 p-2 text-amber-200">بانتظار التأكيد: ${esc(L.pending || "—")}</div>
-        <div class="col-span-2 text-slate-500">صفقات مفتوحة: ${(v.open || []).length}</div>
       </div>
     </div>`;
   }).join("");
@@ -1767,11 +1811,11 @@ function drawEquity(points, start) {
   $("equityEmpty").classList.toggle("hidden", !empty);
   $("equityMeta").textContent = empty ? "" : `${points.length} صفقة مغلقة`;
   if (empty) { if (chart) { chart.destroy(); chart = null; } return; }
-  const labels = [dt(null), ...points.map(p => dt(p.t))];
+  const labels = ["البداية", ...points.map(p => dt(p.t))];
   const data = [start, ...points.map(p => p.bal)];
   if (!chart) {
     const ctx = $("equity").getContext("2d");
-    const grad = ctx.createLinearGradient(0, 0, 0, 280);
+    const grad = ctx.createLinearGradient(0, 0, 0, 260);
     grad.addColorStop(0, "rgba(232,121,249,.45)");
     grad.addColorStop(1, "rgba(232,121,249,0)");
     chart = new Chart($("equity"), {
@@ -1793,51 +1837,62 @@ function drawEquity(points, start) {
   }
 }
 
-function renderSettings(st, cfg) {
+let pickedMode = null;
+function renderSettings(st) {
   if (!st) return;
   const cur = st.mode;
   $("modes").innerHTML = st.modes.map(m => `
-    <label class="block rounded-xl border p-4 transition ${m.available ? "border-slate-700 cursor-pointer hover:border-amber-400/60" : "border-slate-800 opacity-50"}">
+    <label class="block rounded-xl border p-3 transition ${m.available ? "border-slate-700 cursor-pointer hover:border-amber-400/60" : "border-slate-800 opacity-50"}">
       <div class="flex items-center gap-2">
-        <input type="radio" name="mode" value="${esc(m.key)}" ${m.available ? "" : "disabled"} ${cur === m.key ? "checked" : ""}>
+        <input type="radio" name="mode" value="${esc(m.key)}" ${m.available ? "" : "disabled"} ${(pickedMode || cur) === m.key ? "checked" : ""}>
         <span class="font-semibold text-sm">${esc(m.name)}</span>
+        ${cur === m.key ? '<span class="badge border-emerald-500/40 text-emerald-300">مفعّل</span>' : ""}
       </div>
-      <p class="text-xs text-slate-400 mt-2">${esc(m.note)}</p>
-      ${cur === m.key ? '<span class="badge border-emerald-500/40 text-emerald-300 mt-2 inline-block">مفعّل الآن</span>' : ""}
+      <p class="text-[11px] text-slate-400 mt-1">${esc(m.note)}</p>
     </label>`).join("");
+  document.querySelectorAll('input[name="mode"]').forEach(el => el.onchange = () => { pickedMode = el.value; });
 
-  $("keyStatus").textContent = st.keys.present ? `🔑 ${st.keys.market_label} · ${st.keys.masked}` : "لا توجد مفاتيح";
+  $("keyStatus").textContent = st.keys.present ? `🔑 ${st.keys.masked}` : "";
   if (!$("market").options.length) $("market").innerHTML = st.markets.map(m => `<option value="${esc(m.key)}">${esc(m.label)}</option>`).join("");
   if (st.last_test) $("testOut").textContent = st.last_test.ok ? `✔ آخر اختبار ناجح: ${num(st.last_test.usdt_free)} USDT` : `✘ آخر اختبار فشل: ${st.last_test.error}`;
 
   const ta = st.tickerall;
   $("taBadge").textContent = ta.present ? (ta.session ? "متصل ✔" : "محفوظ · غير متصل") : "غير مرتبط";
   $("taBadge").className = "badge " + (ta.present ? (ta.session ? "border-emerald-500/40 text-emerald-300" : "border-amber-500/40 text-amber-300") : "border-slate-600 text-slate-300");
-  if (ta.present) {
-    if (!$("taLogin").value) $("taLogin").value = ta.login_full || "";
-    if (!$("taServer").value) $("taServer").value = ta.server || "";
-    if (!$("taSymGold").dataset.touched) $("taSymGold").value = ta.symbols.XAUUSD;
-    if (!$("taSymBtc").dataset.touched) $("taSymBtc").value = ta.symbols.BTCUSDT;
-    $("taOut").textContent = `🔑 مفتاح: ${ta.api_key_masked} · حساب: ${ta.login_masked} · سيرفر: ${ta.server}` +
+  if (!$("taSymGold").dataset.touched) $("taSymGold").value = ta.symbols.XAUUSD;
+  if (!$("taSymBtc").dataset.touched) $("taSymBtc").value = ta.symbols.BTCUSDT;
+  if (!$("taServer").value && ta.server) $("taServer").value = ta.server;
+  $("taOut").textContent = ta.present
+    ? `🔑 مفتاح: ${ta.api_key_masked} · حساب: ${ta.login_masked} · سيرفر: ${ta.server}` +
       (ta.session ? `\nالجلسة نشطة حتى ${dt(ta.session.expiresAt)}` : "\nلا توجد جلسة نشطة، اضغط اتصال واختبار.") +
-      (ta.last_test ? `\n${ta.last_test.ok ? "✔ " + ta.last_test.note : "✘ " + ta.last_test.error}` : "");
-  } else {
-    $("taOut").textContent = "لم تُحفظ بيانات TickerAll بعد.";
-  }
+      (ta.last_test ? `\n${ta.last_test.ok ? "✔ " + ta.last_test.note : "✘ " + ta.last_test.error}` : "")
+    : "لم تُحفظ بيانات TickerAll بعد.";
 }
 
+// ---------- requests ----------
 async function postJson(url, body) {
+  const pwd = $("pw").value.trim();
+  if (!pwd) {
+    $("pw").classList.add("bad");
+    $("pw").focus();
+    return { ok: false, data: { error: "أدخل كلمة مرور الإدارة في أعلى الصفحة أولاً" }, status: 0 };
+  }
+  $("pw").classList.remove("bad");
   const r = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Admin-Password": $("pw").value },
+    headers: { "Content-Type": "application/json", "X-Admin-Password": pwd },
     body: JSON.stringify(body || {}),
   });
   const j = await r.json().catch(() => ({}));
+  if (r.status === 401) {
+    $("pw").classList.add("bad");
+    return { ok: false, data: { error: "كلمة مرور الإدارة غير صحيحة (هذه ليست كلمة مرور الحساب التجريبي)" }, status: 401 };
+  }
   return { ok: r.ok, data: j, status: r.status };
 }
 
 function report(res, el) {
-  const text = res.ok ? (res.data.note || "تم ✔") : "✘ " + (res.data.error || res.status);
+  const text = res.ok ? (res.data.note || "تم ✔") : "✘ " + (res.data.error || ("خطأ " + res.status));
   if (el) el.textContent = text; else msg(text);
   setTimeout(load, 800);
 }
@@ -1848,8 +1903,33 @@ $("btnEvolve").onclick = async () => report(await postJson("/api/evolve"));
 
 $("btnSetMode").onclick = async () => {
   const sel = document.querySelector('input[name="mode"]:checked');
-  if (!sel) return msg("اختر وضعاً أولاً");
+  if (!sel) return report({ ok: false, data: { error: "اختر وضعاً أولاً" } }, $("modeOut"));
+  pickedMode = null;
   report(await postJson("/api/settings", { mode: sel.value }), $("modeOut"));
+};
+
+$("btnSaveTa").onclick = async () => {
+  $("taOut").textContent = "جارٍ الحفظ...";
+  const res = await postJson("/api/tickerall", {
+    api_key: $("taKey").value, login: $("taLogin").value, server: $("taServer").value,
+    password: $("taPass").value,
+    symbols: { XAUUSD: $("taSymGold").value, BTCUSDT: $("taSymBtc").value },
+  });
+  if (res.ok) { $("taKey").value = ""; $("taPass").value = ""; }
+  report(res, $("taOut"));
+};
+$("btnTestTa").onclick = async () => {
+  $("taOut").textContent = "جارٍ الاتصال بالوسيط...";
+  const res = await postJson("/api/tickerall/test");
+  if (!res.ok) return report(res, $("taOut"));
+  const m = (res.data.matches || []).join("، ") || "لم يُعثر على رموز ذهب أو بيتكوين";
+  const lines = Object.entries(res.data.checks || {}).map(([a, v]) => `${a}: ${v.ok ? "✔ حجم أدنى " + v.volumeMin : "✘ " + v.error}`);
+  $("taOut").textContent = `✔ ${res.data.note}\nرموز مشابهة: ${m}\n${lines.join("\n")}`;
+  setTimeout(load, 800);
+};
+$("btnClearTa").onclick = async () => {
+  if (!confirm("حذف بيانات TickerAll؟")) return;
+  report(await postJson("/api/tickerall/clear"), $("taOut"));
 };
 
 $("btnSaveKeys").onclick = async () => {
@@ -1868,30 +1948,6 @@ $("btnClearKeys").onclick = async () => {
 
 $("taSymGold").oninput = () => $("taSymGold").dataset.touched = "1";
 $("taSymBtc").oninput = () => $("taSymBtc").dataset.touched = "1";
-$("btnSaveTa").onclick = async () => {
-  $("taOut").textContent = "جارٍ الحفظ...";
-  const res = await postJson("/api/tickerall", {
-    api_key: $("taKey").value, login: $("taLogin").value, server: $("taServer").value,
-    password: $("taPass").value,
-    symbols: { XAUUSD: $("taSymGold").value, BTCUSDT: $("taSymBtc").value },
-  });
-  if (res.ok) { $("taKey").value = ""; $("taPass").value = ""; }
-  report(res, $("taOut"));
-};
-$("btnTestTa").onclick = async () => {
-  $("taOut").textContent = "جارٍ الاتصال بالوسيط...";
-  const res = await postJson("/api/tickerall/test");
-  if (!res.ok) return report(res, $("taOut"));
-  const m = (res.data.matches || []).join("، ") || "لم يُعثر على رموز ذهب أو بيتكوين";
-  const c = res.data.checks || {};
-  const lines = Object.entries(c).map(([a, v]) => `${a}: ${v.ok ? "✔ حجم أدنى " + v.volumeMin : "✘ " + v.error}`);
-  $("taOut").textContent = `✔ ${res.data.note}\nرموز مشابهة: ${m}\n${lines.join("\n")}`;
-  setTimeout(load, 800);
-};
-$("btnClearTa").onclick = async () => {
-  if (!confirm("حذف بيانات TickerAll؟")) return;
-  report(await postJson("/api/tickerall/clear"), $("taOut"));
-};
 
 load();
 setInterval(load, 30000);
