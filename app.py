@@ -13,7 +13,7 @@ import traceback
 import uuid
 from collections import deque
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 from urllib.parse import urlencode
@@ -1230,13 +1230,41 @@ def _ts_any(value):
     return _parse_ts(value)
 
 
-def ta_history(asset: str, interval: str, count: int) -> pd.DataFrame:
-    """شموع من الوسيط عبر TickerAll. المسار وأسماء الحقول غير مؤكدة بعد:
-    عند أي شكل غير متوقع يُرفع خطأ يحتوي على جزء من الرد لتصحيحه من السجل."""
-    client = ta_client(store)
-    data = client._acct("GET", "/candles", params={
-        "symbol": ta_symbol(store, asset), "timeframe": TA_CANDLE_TF[interval], "count": count})
-    items = _items(data, "candles", "data", "items", "bars")
+TA_WINDOW = {"1h": timedelta(days=60), "1d": timedelta(days=400)}
+_TA_OK_VARIANT = {}
+
+
+def _ta_candle_attempts(symbol, tf, interval, count, now):
+    """الصيغ المحتملة لطلب الشموع بالترتيب: نطاق زمني صريح أولاً،
+    لأن الوسيط يستخدم نافذة 24 ساعة افتراضياً عند تجاهل الوقت."""
+    span = TA_WINDOW[interval]
+    return [
+        ("range", {"symbol": symbol, "timeframe": tf, "count": count,
+                   "from": (now - span).isoformat(), "to": now.isoformat()}),
+        ("count", {"symbol": symbol, "timeframe": tf, "count": count}),
+        ("hours", {"symbol": symbol, "timeframe": tf, "hours": int(span.total_seconds() // 3600)}),
+    ]
+
+
+def ta_history(asset: str, interval: str, count: int, client=None) -> pd.DataFrame:
+    """شموع من الوسيط عبر TickerAll. يجرب عدة صيغ للطلب ويسجل أي صيغة نجحت.
+    إذا لم ترجع أي صيغة شموعاً يُرفع خطأ واضح (غالباً السوق مغلق أو التاريخ غير محمّل)."""
+    client = client or ta_client(store)
+    symbol = ta_symbol(store, asset)
+    now = datetime.now(timezone.utc)
+    items, data, used = [], None, None
+    for name, params in _ta_candle_attempts(symbol, TA_CANDLE_TF[interval], interval, count, now):
+        data = client._acct("GET", "/candles", params=params)
+        items = _items(data, "candles", "data", "items", "bars") or []
+        if items:
+            used = name
+            break
+    if used and _TA_OK_VARIANT.get((asset, interval)) != used:
+        _TA_OK_VARIANT[(asset, interval)] = used
+        log_event("info", f"صيغة طلب الشموع الناجحة: {used} ({interval})", asset)
+    if not items:
+        raise TickerAllError(502, "NO_CANDLES",
+                             f"لا شموع من الوسيط لأي صيغة طلب (غالباً السوق مغلق أو التاريخ غير محمّل): {str(data)[:120]}")
     recs = []
     for c in items or []:
         if not isinstance(c, dict):
