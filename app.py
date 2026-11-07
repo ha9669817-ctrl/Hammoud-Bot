@@ -1431,131 +1431,195 @@ def evolve_now():
     return jsonify({"ok": True, "note": "بدأ التطوير، قد يستغرق عدة دقائق"})
 
 
-INDEX_HTML = r'''<!doctype html>
+INDEX_HTML = r'''
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>مركز التحليل الذاتي</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
-  body {
-    background:
-      radial-gradient(1100px 620px at 8% -12%, rgba(251,191,36,.10), transparent 60%),
-      radial-gradient(900px 560px at 108% 2%, rgba(232,121,249,.12), transparent 55%),
-      #020617;
-    background-attachment: fixed;
+  :root {
+    --bg: #05070b;
+    --panel: rgba(14, 19, 29, .62);
+    --line: rgba(255, 255, 255, .07);
+    --text: #e6ebf3;
+    --muted: #7c8799;
+    --gold: #f5c451;
+    --emerald: #34d399;
+    --rose: #fb7185;
+    --sky: #38bdf8;
   }
-  .card { background: linear-gradient(180deg, rgba(15,23,42,.82), rgba(2,6,23,.86));
-          border: 1px solid rgba(148,163,184,.12); border-radius: 1.1rem;
-          box-shadow: 0 18px 50px -20px rgba(0,0,0,.7); }
-  .glow-amber { box-shadow: 0 0 40px -12px rgba(251,191,36,.40); }
-  .glow-emerald { box-shadow: 0 0 40px -12px rgba(52,211,153,.40); }
-  .glow-rose { box-shadow: 0 0 40px -12px rgba(251,113,133,.40); }
-  .glow-fuchsia { box-shadow: 0 0 40px -12px rgba(232,121,249,.40); }
-  .glow-sky { box-shadow: 0 0 40px -12px rgba(56,189,248,.40); }
-  .title-grad { background: linear-gradient(90deg,#fbbf24,#e879f9,#38bdf8);
-                -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .dot { width:9px; height:9px; border-radius:9999px; background:#34d399; box-shadow:0 0 12px #34d399; animation: pulse 2s ease-in-out infinite; }
-  .dot.off { background:#64748b; box-shadow:none; animation:none; }
-  @keyframes pulse { 0%,100% {opacity:1} 50% {opacity:.4} }
-  .btn { border-radius:.7rem; padding:.5rem .9rem; font-size:.85rem; font-weight:600; transition:.2s; border:1px solid rgba(148,163,184,.15); background:rgba(30,41,59,.7); white-space:nowrap; }
-  .btn:hover { background:rgba(51,65,85,.9); }
-  .btn-primary { background:linear-gradient(90deg,#f59e0b,#d946ef); color:#0f172a; border:none; }
-  .btn-primary:hover { filter:brightness(1.08); }
-  .btn-danger { background:rgba(127,29,29,.55); border-color:rgba(251,113,133,.25); }
-  .inp { background:rgba(2,6,23,.7); border:1px solid rgba(148,163,184,.18); border-radius:.7rem; padding:.5rem .7rem; font-size:.85rem; width:100%; outline:none; }
-  .inp:focus { border-color:rgba(251,191,36,.6); box-shadow:0 0 0 3px rgba(251,191,36,.12); }
-  .inp.bad { border-color:rgba(251,113,133,.7); }
-  .tab-btn { padding:.5rem 1rem; border-radius:.7rem; font-size:.85rem; font-weight:600; color:#94a3b8; border:1px solid transparent; }
-  .tab-btn.active { color:#0f172a; background:linear-gradient(90deg,#fbbf24,#e879f9); }
-  .badge { font-size:.7rem; border-radius:9999px; padding:.15rem .6rem; border:1px solid; white-space:nowrap; }
-  .tbl th { color:#94a3b8; font-weight:500; font-size:.75rem; padding:.45rem; text-align:right; }
-  .tbl td { padding:.5rem .45rem; border-top:1px solid rgba(148,163,184,.08); font-size:.82rem; }
-  .bar { height:6px; border-radius:9999px; background:rgba(148,163,184,.15); overflow:hidden; }
-  .bar > span { display:block; height:100%; border-radius:9999px; background:linear-gradient(90deg,#34d399,#38bdf8); }
-  summary { cursor:pointer; list-style:none; }
-  summary::-webkit-details-marker { display:none; }
+  html, body { background: var(--bg); }
+  body {
+    font-family: "IBM Plex Sans Arabic", "Segoe UI", system-ui, sans-serif;
+    color: var(--text);
+    background-image:
+      radial-gradient(900px 500px at 85% -10%, rgba(52, 211, 153, .10), transparent 60%),
+      radial-gradient(800px 480px at 0% 0%, rgba(245, 196, 81, .08), transparent 55%),
+      linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+    background-size: auto, auto, 44px 44px, 44px 44px;
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+  }
+  .num { font-family: "JetBrains Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .glass {
+    background: linear-gradient(180deg, rgba(20, 27, 40, .72), rgba(8, 11, 18, .72));
+    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--line); border-radius: 22px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 30px 60px -30px rgba(0,0,0,.8);
+  }
+  .ring-gold    { box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 0 0 1px rgba(245,196,81,.18), 0 20px 50px -20px rgba(245,196,81,.25); }
+  .ring-emerald { box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 0 0 1px rgba(52,211,153,.18), 0 20px 50px -20px rgba(52,211,153,.25); }
+  .ring-rose    { box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 0 0 1px rgba(251,113,133,.18), 0 20px 50px -20px rgba(251,113,133,.25); }
+  .ring-sky     { box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 0 0 1px rgba(56,189,248,.16), 0 20px 50px -20px rgba(56,189,248,.22); }
+  .eyebrow { font-size: 11px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+  .title-grad { background: linear-gradient(95deg, #fff 0%, var(--gold) 55%, var(--emerald) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+  .pulse { width: 8px; height: 8px; border-radius: 999px; background: var(--emerald); box-shadow: 0 0 0 0 rgba(52,211,153,.6); animation: ping 2s infinite; }
+  .pulse.off { background: #475569; animation: none; box-shadow: none; }
+  @keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(52,211,153,.55); } 70% { box-shadow: 0 0 0 10px rgba(52,211,153,0); } 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); } }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; border-radius: 14px; padding: .55rem 1rem; font-size: .85rem; font-weight: 600; color: var(--text); background: rgba(255,255,255,.04); border: 1px solid var(--line); transition: all .18s ease; white-space: nowrap; }
+  .btn:hover { background: rgba(255,255,255,.09); transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn-primary { color: #05070b; background: linear-gradient(120deg, var(--gold), #fb923c 45%, var(--emerald)); border: none; box-shadow: 0 10px 30px -10px rgba(245,196,81,.55); }
+  .btn-primary:hover { filter: brightness(1.07); background: linear-gradient(120deg, var(--gold), #fb923c 45%, var(--emerald)); }
+  .btn-danger { color: #fecdd3; background: rgba(244,63,94,.10); border-color: rgba(251,113,133,.25); }
+  .btn-danger:hover { background: rgba(244,63,94,.18); }
+
+  .inp { width: 100%; background: rgba(3,5,9,.7); border: 1px solid var(--line); border-radius: 14px; padding: .6rem .8rem; font-size: .88rem; color: var(--text); outline: none; transition: border-color .18s, box-shadow .18s; }
+  .inp::placeholder { color: #4b5563; }
+  .inp:focus { border-color: rgba(245,196,81,.55); box-shadow: 0 0 0 4px rgba(245,196,81,.10); }
+  .inp.bad { border-color: rgba(251,113,133,.8); box-shadow: 0 0 0 4px rgba(251,113,133,.12); }
+  .label { display: block; font-size: .75rem; color: var(--muted); margin-bottom: .35rem; }
+
+  .seg { display: inline-flex; gap: 4px; padding: 4px; border-radius: 16px; background: rgba(3,5,9,.7); border: 1px solid var(--line); overflow-x: auto; max-width: 100%; }
+  .seg-btn { padding: .5rem 1.1rem; border-radius: 12px; font-size: .86rem; font-weight: 600; color: var(--muted); white-space: nowrap; transition: all .18s; }
+  .seg-btn:hover { color: var(--text); }
+  .seg-btn.active { color: #05070b; background: linear-gradient(120deg, var(--gold), var(--emerald)); box-shadow: 0 8px 20px -8px rgba(245,196,81,.6); }
+
+  .badge { display: inline-flex; align-items: center; gap: .35rem; font-size: .72rem; font-weight: 600; border-radius: 999px; padding: .2rem .65rem; border: 1px solid var(--line); background: rgba(255,255,255,.03); color: var(--muted); white-space: nowrap; }
+  .b-up { color: var(--emerald); border-color: rgba(52,211,153,.35); background: rgba(52,211,153,.08); }
+  .b-down { color: var(--rose); border-color: rgba(251,113,133,.35); background: rgba(251,113,133,.08); }
+  .b-gold { color: var(--gold); border-color: rgba(245,196,81,.35); background: rgba(245,196,81,.08); }
+  .b-sky { color: var(--sky); border-color: rgba(56,189,248,.35); background: rgba(56,189,248,.08); }
+
+  .bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.06); overflow: hidden; }
+  .bar > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--emerald), var(--sky)); transition: width .6s ease; }
+
+  .tbl { width: 100%; border-collapse: separate; border-spacing: 0; }
+  .tbl th { color: var(--muted); font-weight: 500; font-size: .74rem; padding: .6rem .6rem; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .tbl td { padding: .7rem .6rem; font-size: .84rem; border-bottom: 1px solid rgba(255,255,255,.04); white-space: nowrap; }
+  .tbl tr:hover td { background: rgba(255,255,255,.02); }
+
+  .up { color: var(--emerald); }
+  .down { color: var(--rose); }
+  .flat { color: #cbd5e1; }
+  .card-title { font-weight: 700; font-size: 1rem; }
+  details > summary { list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  .fade-in { animation: fade .45s ease both; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
 </style>
 </head>
-<body class="text-slate-100 min-h-screen font-sans antialiased">
-<div class="max-w-7xl mx-auto p-3 md:p-6 space-y-5">
+<body class="min-h-screen">
 
-  <!-- Header -->
-  <header class="card p-4 md:p-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-    <div class="flex items-center gap-3">
-      <div class="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-400 to-fuchsia-500 flex items-center justify-center text-xl">🧬</div>
-      <div>
-        <h1 class="text-xl md:text-2xl font-extrabold title-grad">مركز التحليل الذاتي</h1>
-        <p class="text-slate-400 text-xs flex items-center gap-2 mt-0.5">
-          <span id="liveDot" class="dot"></span><span id="liveText">جارٍ الاتصال...</span>
-        </p>
+<div class="max-w-7xl mx-auto px-3 md:px-6 pb-10">
+
+  <!-- ============ Top bar ============ -->
+  <header class="sticky top-0 z-20 -mx-3 md:-mx-6 px-3 md:px-6 pt-3 pb-3 backdrop-blur-xl bg-[#05070b]/70 border-b border-white/5">
+    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-11 h-11 rounded-2xl flex items-center justify-center text-lg font-bold text-[#05070b]" style="background:linear-gradient(135deg,#f5c451,#34d399);box-shadow:0 10px 30px -8px rgba(245,196,81,.5)">MA</div>
+        <div>
+          <h1 class="title-grad text-lg md:text-xl font-extrabold leading-tight">مركز التحليل الذاتي</h1>
+          <p class="flex items-center gap-2 text-[12px] text-[var(--muted)] mt-0.5">
+            <span id="liveDot" class="pulse"></span><span id="liveText">جارٍ الاتصال...</span>
+          </p>
+        </div>
+      </div>
+      <div class="flex flex-col sm:flex-row gap-2">
+        <input id="pw" type="password" placeholder="كلمة مرور الإدارة" autocomplete="current-password" class="inp sm:w-48">
+        <select id="scope" class="inp sm:w-44">
+          <option value="all">الذهب + البيتكوين</option>
+          <option value="XAUUSD">الذهب فقط</option>
+          <option value="BTCUSDT">البيتكوين فقط</option>
+        </select>
+        <div class="flex gap-2">
+          <button id="btnScope" class="btn">حفظ الأصول</button>
+          <button id="btnRun" class="btn">فحص</button>
+          <button id="btnEvolve" class="btn btn-primary">تطوير</button>
+        </div>
       </div>
     </div>
-    <div class="flex flex-col sm:flex-row gap-2 items-stretch">
-      <input id="pw" type="password" placeholder="كلمة مرور الإدارة" autocomplete="current-password" class="inp sm:w-52">
-      <select id="scope" class="inp sm:w-44">
-        <option value="all">الذهب + البيتكوين</option>
-        <option value="XAUUSD">الذهب فقط</option>
-        <option value="BTCUSDT">البيتكوين فقط</option>
-      </select>
-      <div class="flex gap-2">
-        <button id="btnScope" class="btn">حفظ الأصول</button>
-        <button id="btnRun" class="btn">فحص</button>
-        <button id="btnEvolve" class="btn btn-primary">🧬 تطوير</button>
-      </div>
-    </div>
+    <p id="msg" class="text-xs text-amber-200 min-h-[1rem] mt-2 px-1"></p>
   </header>
-  <p id="msg" class="text-xs text-amber-200 min-h-[1rem] px-2"></p>
 
-  <!-- Tabs -->
-  <nav class="flex gap-2 overflow-x-auto pb-1">
-    <button class="tab-btn active" data-tab="overview">الرئيسية</button>
-    <button class="tab-btn" data-tab="brokers">الوسطاء والإعدادات</button>
-    <button class="tab-btn" data-tab="research">التطوير والسجل</button>
+  <!-- ============ Tabs ============ -->
+  <nav class="mt-4 mb-5">
+    <div class="seg">
+      <button class="seg-btn active" data-tab="overview">الرئيسية</button>
+      <button class="seg-btn" data-tab="brokers">الوسطاء والإعدادات</button>
+      <button class="seg-btn" data-tab="research">التطوير والسجل</button>
+    </div>
   </nav>
 
   <!-- ============ Tab: overview ============ -->
-  <section data-pane="overview" class="space-y-5">
-    <div id="kpis" class="grid grid-cols-2 xl:grid-cols-4 gap-3"></div>
+  <section data-pane="overview" class="space-y-5 fade-in">
+    <div id="kpis" class="grid grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4"></div>
 
-    <div class="card glow-fuchsia p-4 md:p-5">
-      <div class="flex items-center justify-between mb-2">
-        <h2 class="font-bold">منحنى الرصيد</h2>
-        <span id="equityMeta" class="text-xs text-slate-400"></span>
+    <div class="glass ring-emerald p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <h2 class="card-title">منحنى الرصيد</h2>
+          <p class="text-xs text-[var(--muted)]">الرصيد بعد كل صفقة مغلقة</p>
+        </div>
+        <span id="equityMeta" class="badge"></span>
       </div>
-      <div class="relative h-64"><canvas id="equity"></canvas></div>
-      <p id="equityEmpty" class="text-slate-500 text-sm text-center py-8 hidden">لا توجد صفقات مغلقة بعد.</p>
+      <div class="relative h-64 md:h-72"><canvas id="equity"></canvas></div>
+      <p id="equityEmpty" class="text-[var(--muted)] text-sm text-center py-10 hidden">لا توجد صفقات مغلقة بعد.</p>
     </div>
 
-    <div id="assets" class="grid gap-4 lg:grid-cols-2"></div>
+    <div>
+      <h2 class="eyebrow mb-3 px-1">الأصول</h2>
+      <div id="assets" class="grid gap-4 lg:grid-cols-2"></div>
+    </div>
 
     <div class="grid gap-4 xl:grid-cols-2">
-      <div class="card glow-sky p-4 md:p-5">
-        <div class="flex items-center justify-between mb-2">
-          <h2 class="font-bold">الصفقات المفتوحة</h2>
-          <span id="openCount" class="badge border-sky-500/40 text-sky-300">0</span>
+      <div class="glass ring-sky p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="card-title">الصفقات المفتوحة</h2>
+          <span id="openCount" class="badge b-sky">0</span>
         </div>
-        <div class="overflow-x-auto"><table class="w-full tbl">
+        <div class="overflow-x-auto"><table class="tbl">
           <thead><tr><th>الأصل</th><th>الاتجاه</th><th>الدخول</th><th>الوقف</th><th>الهدف</th><th>الوضع</th></tr></thead>
           <tbody id="openRows"></tbody>
         </table></div>
-        <div id="unmanagedBox" class="mt-4 hidden">
+        <div id="unmanagedBox" class="mt-5 hidden">
           <div class="text-xs font-semibold text-amber-300 mb-2">مراكز على المنصة غير مُدارة من النظام</div>
-          <div class="overflow-x-auto"><table class="w-full tbl">
+          <div class="overflow-x-auto"><table class="tbl">
             <thead><tr><th>الرمز</th><th>الاتجاه</th><th>الحجم</th><th>الربح</th><th>الوقف</th><th>الهدف</th></tr></thead>
             <tbody id="unmanagedRows"></tbody>
           </table></div>
         </div>
       </div>
-      <div class="card p-4 md:p-5">
-        <div class="flex items-center justify-between mb-2">
-          <h2 class="font-bold">الصفقات المغلقة</h2>
-          <span class="text-xs text-slate-400">آخر 60</span>
+      <div class="glass p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="card-title">الصفقات المغلقة</h2>
+          <span class="badge">آخر 60</span>
         </div>
-        <div class="overflow-auto max-h-96"><table class="w-full tbl">
-          <thead class="sticky top-0 bg-slate-950"><tr><th>الأصل</th><th>الاتجاه</th><th>R</th><th>الربح</th><th>الإغلاق</th></tr></thead>
+        <div class="overflow-auto max-h-96"><table class="tbl">
+          <thead class="sticky top-0 bg-[#0a0e16]"><tr><th>الأصل</th><th>الاتجاه</th><th>R</th><th>الربح</th><th>الإغلاق</th></tr></thead>
           <tbody id="closedRows"></tbody>
         </table></div>
       </div>
@@ -1563,64 +1627,64 @@ INDEX_HTML = r'''<!doctype html>
   </section>
 
   <!-- ============ Tab: brokers ============ -->
-  <section data-pane="brokers" class="hidden space-y-5">
+  <section data-pane="brokers" class="hidden space-y-5 fade-in">
 
-    <div class="card p-4 md:p-5 space-y-4">
-      <div>
-        <h2 class="font-bold">وضع التنفيذ</h2>
-        <p class="text-xs text-slate-400">اختر الوضع ثم اضغط تطبيق. الحقيقي غير مفعّل في هذه النسخة.</p>
+    <div class="glass p-5">
+      <div class="mb-4">
+        <h2 class="card-title">وضع التنفيذ</h2>
+        <p class="text-xs text-[var(--muted)]">اختر الوضع ثم اضغط تطبيق. الوضع الحقيقي غير مفعّل في هذه النسخة.</p>
       </div>
-      <div id="modes" class="grid gap-2 md:grid-cols-4"></div>
-      <div class="flex flex-wrap items-center gap-3">
+      <div id="modes" class="grid gap-3 md:grid-cols-4"></div>
+      <div class="flex flex-wrap items-center gap-3 mt-4">
         <button id="btnSetMode" class="btn btn-primary">تطبيق الوضع المختار</button>
-        <span id="modeOut" class="text-xs text-slate-300"></span>
+        <span id="modeOut" class="text-xs text-[var(--muted)]"></span>
       </div>
     </div>
 
-    <div class="card p-4 md:p-5 space-y-4 glow-amber">
-      <div class="flex flex-wrap items-center justify-between gap-2">
+    <div class="glass ring-gold p-5 space-y-5">
+      <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="font-bold">TickerAll · MT5 تجريبي (Exness Demo)</h2>
-          <p class="text-xs text-slate-400">الوقف والهدف يُحملان على جهة الوسيط. الحسابات الحقيقية مرفوضة.</p>
+          <h2 class="card-title">TickerAll · MT5 تجريبي (Exness)</h2>
+          <p class="text-xs text-[var(--muted)] mt-1">الوقف والهدف يُحملان على جهة الوسيط. الحسابات الحقيقية مرفوضة.</p>
         </div>
-        <span id="taBadge" class="badge border-slate-600 text-slate-300">غير مرتبط</span>
+        <span id="taBadge" class="badge">غير مرتبط</span>
       </div>
 
-      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <label class="space-y-1"><span class="text-xs text-slate-400">API Key</span>
+      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <label><span class="label">API Key</span>
           <input id="taKey" type="text" autocomplete="off" spellcheck="false" class="inp" placeholder="cf_api_…"></label>
-        <label class="space-y-1"><span class="text-xs text-slate-400">رقم الحساب التجريبي</span>
+        <label><span class="label">رقم الحساب التجريبي</span>
           <input id="taLogin" type="text" inputmode="numeric" autocomplete="off" class="inp"></label>
-        <label class="space-y-1"><span class="text-xs text-slate-400">السيرفر</span>
+        <label><span class="label">السيرفر</span>
           <input id="taServer" type="text" autocomplete="off" class="inp" placeholder="Exness-MT5Trial16"></label>
-        <label class="space-y-1"><span class="text-xs text-slate-400">كلمة مرور الحساب التجريبي</span>
+        <label><span class="label">كلمة مرور الحساب التجريبي</span>
           <input id="taPass" type="password" autocomplete="new-password" class="inp"></label>
-        <label class="space-y-1"><span class="text-xs text-slate-400">رمز الذهب لدى الوسيط</span>
+        <label><span class="label">رمز الذهب لدى الوسيط</span>
           <input id="taSymGold" type="text" class="inp" value="XAUUSD"></label>
-        <label class="space-y-1"><span class="text-xs text-slate-400">رمز البيتكوين لدى الوسيط</span>
+        <label><span class="label">رمز البيتكوين لدى الوسيط</span>
           <input id="taSymBtc" type="text" class="inp" value="BTCUSD"></label>
       </div>
-      <p class="text-[11px] text-slate-500">ملاحظة: الحقول أعلاه لحساب المنصة. كلمة مرور الإدارة في الأعلى حقل منفصل يحمي الحفظ.</p>
+      <p class="text-[11px] text-[var(--muted)]">الحقول أعلاه لحساب المنصة. كلمة مرور الإدارة في أعلى الصفحة حقل منفصل يحمي الحفظ.</p>
 
       <div class="flex flex-wrap gap-2">
         <button id="btnSaveTa" class="btn btn-primary">حفظ</button>
         <button id="btnTestTa" class="btn">اتصال واختبار الرموز</button>
         <button id="btnClearTa" class="btn btn-danger">حذف</button>
       </div>
-      <p id="taOut" class="text-xs text-slate-300 whitespace-pre-line"></p>
+      <pre id="taOut" class="num text-xs text-slate-300 whitespace-pre-wrap rounded-2xl bg-black/30 border border-white/5 p-3 min-h-[3rem]"></pre>
     </div>
 
-    <details class="card p-4 md:p-5">
-      <summary class="flex items-center justify-between">
-        <span class="font-bold">Binance Testnet <span class="text-xs text-slate-400 font-normal">· للبيتكوين، أموال وهمية</span></span>
-        <span id="keyStatus" class="text-xs text-slate-400"></span>
+    <details class="glass p-5">
+      <summary class="flex flex-wrap items-center justify-between gap-2">
+        <span class="card-title">Binance Testnet <span class="text-xs text-[var(--muted)] font-normal">· للبيتكوين، أموال وهمية</span></span>
+        <span id="keyStatus" class="text-xs text-[var(--muted)]"></span>
       </summary>
-      <div class="grid gap-3 md:grid-cols-4 mt-4">
-        <label class="space-y-1"><span class="text-xs text-slate-400">نوع السوق</span>
+      <div class="grid gap-4 md:grid-cols-4 mt-5">
+        <label><span class="label">نوع السوق</span>
           <select id="market" class="inp"></select></label>
-        <label class="space-y-1"><span class="text-xs text-slate-400">API Key</span>
+        <label><span class="label">API Key</span>
           <input id="apiKey" type="text" autocomplete="off" spellcheck="false" class="inp"></label>
-        <label class="space-y-1"><span class="text-xs text-slate-400">API Secret</span>
+        <label><span class="label">API Secret</span>
           <input id="apiSecret" type="password" autocomplete="off" class="inp"></label>
         <div class="flex items-end gap-2">
           <button id="btnSaveKeys" class="btn btn-primary flex-1">حفظ</button>
@@ -1628,26 +1692,26 @@ INDEX_HTML = r'''<!doctype html>
           <button id="btnClearKeys" class="btn btn-danger">حذف</button>
         </div>
       </div>
-      <p id="testOut" class="text-xs text-slate-300 mt-3"></p>
+      <p id="testOut" class="text-xs text-slate-300 mt-4"></p>
     </details>
   </section>
 
   <!-- ============ Tab: research ============ -->
-  <section data-pane="research" class="hidden grid gap-4 xl:grid-cols-3">
-    <div class="card p-4 md:p-5 xl:col-span-2">
-      <h2 class="font-bold mb-2">لوحة المتصدرين</h2>
-      <div class="overflow-x-auto"><table class="w-full tbl">
-        <thead><tr><th>الأصل</th><th>القواعد</th><th>نجاح%</th><th>PF</th><th>تراجع R</th><th>الدرجة</th></tr></thead>
+  <section data-pane="research" class="hidden grid gap-4 xl:grid-cols-3 fade-in">
+    <div class="glass p-5 xl:col-span-2">
+      <h2 class="card-title mb-3">لوحة المتصدرين</h2>
+      <div class="overflow-x-auto"><table class="tbl">
+        <thead><tr><th>الأصل</th><th>الاستراتيجية</th><th>نجاح%</th><th>PF</th><th>تراجع R</th><th>الدرجة</th></tr></thead>
         <tbody id="boardRows"></tbody>
       </table></div>
     </div>
-    <div class="card p-4 md:p-5">
-      <h2 class="font-bold mb-2">سجل التطوير</h2>
+    <div class="glass p-5">
+      <h2 class="card-title mb-3">سجل التطوير</h2>
       <ul id="evoLog" class="space-y-2 text-sm max-h-96 overflow-y-auto"></ul>
     </div>
   </section>
 
-  <footer class="text-[11px] text-slate-500 leading-relaxed px-2">
+  <footer class="text-[11px] text-[var(--muted)] leading-relaxed px-2 mt-10">
     ⚠️ نظام تعليمي يعمل بتنفيذ ورقي أو على حسابات تجريبية فقط. نتائج الاختبار التاريخي لا تضمن أرباحاً مستقبلية، والبحث التطوري قد يُفرط في التخصيص رغم التحقق خارج العينة.
   </footer>
 </div>
@@ -1657,23 +1721,23 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const num = (v, d = 2) => (v == null || isNaN(v)) ? "—" : Number(v).toLocaleString("en-US", {maximumFractionDigits: d, minimumFractionDigits: d});
 const dt = (s) => s ? String(s).slice(0, 16).replace("T", " ") : "—";
-const tone = (v) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-slate-300");
-const sideTxt = (s) => (String(s).toLowerCase() === "buy" ? '<span class="text-emerald-400">شراء</span>' : '<span class="text-rose-400">بيع</span>');
+const tone = (v) => (v > 0 ? "up" : v < 0 ? "down" : "flat");
+const sideTxt = (s) => (String(s).toLowerCase() === "buy" ? '<span class="up">شراء</span>' : '<span class="down">بيع</span>');
 const modeTxt = (m) => ({paper: "ورقي", demo: "Binance", tickerall: "MT5"}[m] || esc(m || "—"));
 const describe = (g) => g ? `ATR ${g.atr_len} · عمق ${g.depth_mult} · بفر ${g.sl_buffer} · ${g.target_r}R · ${g.tf}H · EMA200 ${g.trend ? "✔" : "✘"}` : "";
 
-// ---------- admin password: entered once per browser session ----------
+// ---------- admin password: remembered in this browser ----------
 const PW_KEY = "ma_admin_pw";
 try { $("pw").value = localStorage.getItem(PW_KEY) || ""; } catch (e) {}
 $("pw").addEventListener("input", () => { try { localStorage.setItem(PW_KEY, $("pw").value); } catch (e) {} });
 
 // ---------- tabs ----------
 function showTab(name) {
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".seg-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll("[data-pane]").forEach(p => p.classList.toggle("hidden", p.dataset.pane !== name));
   try { localStorage.setItem("ma_tab", name); } catch (e) {}
 }
-document.querySelectorAll(".tab-btn").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+document.querySelectorAll(".seg-btn").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 showTab((() => { try { return localStorage.getItem("ma_tab") || "overview"; } catch (e) { return "overview"; } })());
 
 let chart = null;
@@ -1695,11 +1759,11 @@ async function load() {
   }
 }
 
-function kpi(label, value, sub, glow, extra = "") {
-  return `<div class="card p-4 ${glow}">
-    <div class="text-[11px] text-slate-400">${label}</div>
-    <div class="kpi-num text-2xl md:text-3xl font-extrabold mt-1">${value}</div>
-    <div class="text-[11px] text-slate-500 mt-1">${sub}</div>${extra}
+function kpi(label, value, sub, ring, extra = "") {
+  return `<div class="glass ${ring} p-4 md:p-5 fade-in">
+    <div class="eyebrow">${label}</div>
+    <div class="num text-2xl md:text-3xl font-bold mt-2">${value}</div>
+    <div class="text-[11px] text-[var(--muted)] mt-1.5">${sub}</div>${extra}
   </div>`;
 }
 
@@ -1707,10 +1771,10 @@ function render(s) {
   const a = s.account;
   const barW = Math.max(0, Math.min(100, a.win_rate || 0));
   $("kpis").innerHTML = [
-    kpi("الرصيد", `$${num(a.balance)}`, `البداية $${num(a.start, 0)}`, "glow-amber"),
-    kpi("العائد", `<span class="${tone(a.return_pct)}">${num(a.return_pct)}%</span>`, `${a.trades} صفقة مغلقة`, a.return_pct >= 0 ? "glow-emerald" : "glow-rose"),
-    kpi("نسبة النجاح", `${num(a.win_rate, 1)}%`, "من الصفقات المغلقة", "glow-sky", `<div class="bar mt-2"><span style="width:${barW}%"></span></div>`),
-    kpi("معامل الربح", num(a.profit_factor), "الأرباح ÷ الخسائر", "glow-fuchsia"),
+    kpi("الرصيد", `$${num(a.balance)}`, `البداية $${num(a.start, 0)}`, "ring-gold"),
+    kpi("العائد", `<span class="${tone(a.return_pct)}">${num(a.return_pct)}%</span>`, `${a.trades} صفقة مغلقة`, a.return_pct >= 0 ? "ring-emerald" : "ring-rose"),
+    kpi("نسبة النجاح", `${num(a.win_rate, 1)}%`, "من الصفقات المغلقة", "ring-sky", `<div class="bar mt-3"><span style="width:${barW}%"></span></div>`),
+    kpi("معامل الربح", num(a.profit_factor), "الأرباح ÷ الخسائر", "ring-emerald"),
   ].join("");
   drawEquity(s.equity, a.start);
   renderAssets(s.assets);
@@ -1728,31 +1792,31 @@ function renderAssets(assets) {
     const champ = v.champion;
     const err = v.live && v.live.error ? `<p class="text-rose-400 text-xs">⚠ ${esc(v.live.error)}</p>` : "";
     const sess = v.session_open
-      ? '<span class="badge border-emerald-500/40 text-emerald-300">🟢 السوق مفتوح</span>'
-      : '<span class="badge border-rose-500/40 text-rose-300">🔴 السوق مغلق</span>';
+      ? '<span class="badge b-up">● السوق مفتوح</span>'
+      : '<span class="badge b-down">● السوق مغلق</span>';
     const champBlock = champ ? `
-      <div class="rounded-xl bg-slate-950/60 border border-amber-500/20 p-3 text-xs space-y-1">
+      <div class="rounded-2xl bg-black/30 border border-amber-400/15 p-4 text-xs space-y-1.5">
         <div class="text-amber-300 font-semibold">الاستراتيجية المعتمدة</div>
-        <div class="text-slate-300">${esc(describe(champ.genome))}</div>
-        <div class="text-slate-400">تحقق: نجاح ${num(champ.result.val.win_rate,1)}% · PF ${num(champ.result.val.profit_factor)} · تراجع ${num(champ.result.val.max_dd_r)}R · ${champ.result.val.trades} صفقة</div>
+        <div class="text-slate-300 num">${esc(describe(champ.genome))}</div>
+        <div class="text-[var(--muted)]">تحقق: نجاح ${num(champ.result.val.win_rate,1)}% · PF ${num(champ.result.val.profit_factor)} · تراجع ${num(champ.result.val.max_dd_r)}R · ${champ.result.val.trades} صفقة</div>
         <div class="text-slate-500">منذ ${dt(champ.since)}</div>
-      </div>` : `<div class="rounded-xl bg-rose-950/40 border border-rose-900 p-3 text-xs text-rose-300">لا توجد استراتيجية معتمدة، التداول متوقف لهذا الأصل.</div>`;
-    return `<div class="card p-4 md:p-5 space-y-3 ${champ ? "glow-amber" : ""}">
+      </div>` : `<div class="rounded-2xl bg-rose-500/10 border border-rose-500/20 p-4 text-xs text-rose-300">لا توجد استراتيجية معتمدة، التداول متوقف لهذا الأصل.</div>`;
+    return `<div class="glass ${champ ? "ring-gold" : ""} p-5 space-y-4 fade-in">
       <div class="flex items-start justify-between gap-3">
         <div>
-          <h3 class="font-bold text-amber-300">${esc(v.label)}</h3>
-          <div class="mt-1">${sess}</div>
+          <h3 class="card-title text-amber-300">${esc(v.label)}</h3>
+          <div class="mt-2">${sess}</div>
         </div>
         <div class="text-left">
-          <div class="kpi-num text-2xl font-extrabold">${num(v.live && v.live.price)}</div>
-          <div class="text-[10px] text-slate-500">آخر إغلاق H1</div>
+          <div class="num text-2xl font-bold">${num(v.live && v.live.price)}</div>
+          <div class="text-[10px] text-[var(--muted)]">آخر إغلاق H1</div>
         </div>
       </div>
       ${err}${champBlock}
       <div class="grid grid-cols-2 gap-2 text-xs text-slate-300">
-        <div class="rounded-lg bg-slate-950/50 p-2">قمة الأمس: <b>${num(L.prev_day_high)}</b></div>
-        <div class="rounded-lg bg-slate-950/50 p-2">قاع الأمس: <b>${num(L.prev_day_low)}</b></div>
-        <div class="col-span-2 rounded-lg bg-slate-950/50 p-2 text-amber-200">بانتظار التأكيد: ${esc(L.pending || "—")}</div>
+        <div class="rounded-xl bg-white/[.03] border border-white/5 p-3">قمة الأمس <b class="num block text-sm mt-1">${num(L.prev_day_high)}</b></div>
+        <div class="rounded-xl bg-white/[.03] border border-white/5 p-3">قاع الأمس <b class="num block text-sm mt-1">${num(L.prev_day_low)}</b></div>
+        <div class="col-span-2 rounded-xl bg-white/[.03] border border-white/5 p-3 text-amber-200">بانتظار التأكيد: ${esc(L.pending || "—")}</div>
       </div>
     </div>`;
   }).join("");
@@ -1763,47 +1827,47 @@ function renderOpen(s) {
   $("openRows").innerHTML = rows.length ? rows.map(t => `
     <tr>
       <td>${esc(t.asset)}</td><td>${sideTxt(t.side)}</td>
-      <td class="kpi-num">${num(t.entry)}</td><td class="kpi-num">${num(t.stop)}</td><td class="kpi-num">${num(t.target)}</td>
-      <td><span class="badge border-slate-600 text-slate-300">${modeTxt(t.mode)}</span></td>
-    </tr>`).join("") : `<tr><td colspan="6" class="p-4 text-slate-500 text-center">لا توجد صفقات مفتوحة</td></tr>`;
+      <td class="num">${num(t.entry)}</td><td class="num">${num(t.stop)}</td><td class="num">${num(t.target)}</td>
+      <td><span class="badge">${modeTxt(t.mode)}</span></td>
+    </tr>`).join("") : `<tr><td colspan="6" class="p-6 text-[var(--muted)] text-center">لا توجد صفقات مفتوحة</td></tr>`;
 
   const unmanaged = Object.values(s.assets).flatMap(v => ((v.live && v.live.ta_positions) || []).filter(p => !p.managed));
   $("unmanagedBox").classList.toggle("hidden", unmanaged.length === 0);
   $("unmanagedRows").innerHTML = unmanaged.map(p => `
-    <tr><td>${esc(p.symbol)}</td><td>${sideTxt(p.side)}</td><td>${num(p.volume)}</td>
-    <td class="${tone(p.profit)}">${num(p.profit)}</td><td>${num(p.stopLoss)}</td><td>${num(p.takeProfit)}</td></tr>`).join("");
+    <tr><td>${esc(p.symbol)}</td><td>${sideTxt(p.side)}</td><td class="num">${num(p.volume)}</td>
+    <td class="num ${tone(p.profit)}">${num(p.profit)}</td><td class="num">${num(p.stopLoss)}</td><td class="num">${num(p.takeProfit)}</td></tr>`).join("");
 }
 
 function renderClosed(closed) {
   $("closedRows").innerHTML = closed.length ? closed.map(t => `
     <tr>
       <td>${esc(t.asset)}</td><td>${sideTxt(t.side)}</td>
-      <td class="${tone(t.r)}">${num(t.r)}R</td>
-      <td class="${tone(t.pnl_usd)}">${t.pnl_usd > 0 ? "+" : ""}${num(t.pnl_usd)}$</td>
-      <td class="text-slate-400">${dt(t.closed_utc)}</td>
-    </tr>`).join("") : `<tr><td colspan="5" class="p-4 text-slate-500 text-center">لا توجد صفقات مغلقة بعد</td></tr>`;
+      <td class="num ${tone(t.r)}">${num(t.r)}R</td>
+      <td class="num ${tone(t.pnl_usd)}">${t.pnl_usd > 0 ? "+" : ""}${num(t.pnl_usd)}$</td>
+      <td class="text-[var(--muted)]">${dt(t.closed_utc)}</td>
+    </tr>`).join("") : `<tr><td colspan="5" class="p-6 text-[var(--muted)] text-center">لا توجد صفقات مغلقة بعد</td></tr>`;
 }
 
 function renderBoard(assets) {
   const board = Object.entries(assets).flatMap(([k, v]) => v.leaderboard.map(x => ({...x, asset: v.label})));
   $("boardRows").innerHTML = board.length ? board.map(x => `
     <tr>
-      <td class="text-xs">${esc(x.asset)}</td>
-      <td class="text-xs text-slate-300">${esc(describe(x.genome))}</td>
-      <td>${num(x.result.val.win_rate, 1)}</td>
-      <td>${num(x.result.val.profit_factor)}</td>
-      <td>${num(x.result.val.max_dd_r)}</td>
-      <td class="text-amber-300 font-semibold">${num(x.score, 3)}</td>
-    </tr>`).join("") : `<tr><td colspan="6" class="p-4 text-slate-500 text-center">لم تُعتمد أي استراتيجية بعد. اضغط "تطوير".</td></tr>`;
+      <td>${esc(x.asset)}</td>
+      <td class="text-xs text-slate-300 num">${esc(describe(x.genome))}</td>
+      <td class="num">${num(x.result.val.win_rate, 1)}</td>
+      <td class="num">${num(x.result.val.profit_factor)}</td>
+      <td class="num">${num(x.result.val.max_dd_r)}</td>
+      <td class="num text-amber-300 font-semibold">${num(x.score, 3)}</td>
+    </tr>`).join("") : `<tr><td colspan="6" class="p-6 text-[var(--muted)] text-center">لم تُعتمد أي استراتيجية بعد. اضغط "تطوير".</td></tr>`;
 }
 
 function renderEvolutions(list) {
   $("evoLog").innerHTML = list.length ? list.map(e => `
-    <li class="rounded-xl bg-slate-950/60 border border-slate-800 p-3">
-      <div class="flex justify-between text-xs text-slate-400"><span>${esc(e.asset)}</span><span>${dt(e.created_utc)}</span></div>
-      <div class="mt-1">جُرّب ${e.evaluated} · نجح ${e.accepted}</div>
-      <div class="text-xs text-slate-400">${esc(e.note)}</div>
-    </li>`).join("") : `<li class="text-slate-500">لا يوجد سجل بعد</li>`;
+    <li class="rounded-2xl bg-black/30 border border-white/5 p-3">
+      <div class="flex justify-between text-xs text-[var(--muted)]"><span>${esc(e.asset)}</span><span class="num">${dt(e.created_utc)}</span></div>
+      <div class="mt-1.5 text-sm">جُرّب ${e.evaluated} · نجح ${e.accepted}</div>
+      <div class="text-xs text-[var(--muted)] mt-0.5">${esc(e.note)}</div>
+    </li>`).join("") : `<li class="text-[var(--muted)]">لا يوجد سجل بعد</li>`;
 }
 
 function drawEquity(points, start) {
@@ -1815,20 +1879,20 @@ function drawEquity(points, start) {
   const data = [start, ...points.map(p => p.bal)];
   if (!chart) {
     const ctx = $("equity").getContext("2d");
-    const grad = ctx.createLinearGradient(0, 0, 0, 260);
-    grad.addColorStop(0, "rgba(232,121,249,.45)");
-    grad.addColorStop(1, "rgba(232,121,249,0)");
+    const grad = ctx.createLinearGradient(0, 0, 0, 280);
+    grad.addColorStop(0, "rgba(52,211,153,.35)");
+    grad.addColorStop(1, "rgba(52,211,153,0)");
     chart = new Chart($("equity"), {
       type: "line",
-      data: { labels, datasets: [{ label: "الرصيد", data, borderColor: "#e879f9", backgroundColor: grad,
+      data: { labels, datasets: [{ label: "الرصيد", data, borderColor: "#34d399", backgroundColor: grad,
         fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2.5 }] },
       options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
         plugins: { legend: { display: false },
-          tooltip: { backgroundColor: "rgba(2,6,23,.95)", borderColor: "rgba(232,121,249,.4)", borderWidth: 1,
-                     titleColor: "#e2e8f0", bodyColor: "#f5d0fe", padding: 10, displayColors: false,
+          tooltip: { backgroundColor: "rgba(5,7,11,.95)", borderColor: "rgba(52,211,153,.35)", borderWidth: 1,
+                     titleColor: "#e6ebf3", bodyColor: "#a7f3d0", padding: 12, displayColors: false,
                      callbacks: { label: c => `$${num(c.parsed.y)}` } } },
-        scales: { x: { ticks: { color: "#64748b", maxTicksLimit: 8 }, grid: { color: "rgba(148,163,184,.06)" } },
-                  y: { ticks: { color: "#64748b", callback: v => "$" + num(v, 0) }, grid: { color: "rgba(148,163,184,.08)" } } } },
+        scales: { x: { ticks: { color: "#64748b", maxTicksLimit: 8 }, grid: { color: "rgba(255,255,255,.03)" } },
+                  y: { ticks: { color: "#64748b", callback: v => "$" + num(v, 0) }, grid: { color: "rgba(255,255,255,.05)" } } } },
     });
   } else {
     chart.data.labels = labels;
@@ -1842,13 +1906,13 @@ function renderSettings(st) {
   if (!st) return;
   const cur = st.mode;
   $("modes").innerHTML = st.modes.map(m => `
-    <label class="block rounded-xl border p-3 transition ${m.available ? "border-slate-700 cursor-pointer hover:border-amber-400/60" : "border-slate-800 opacity-50"}">
+    <label class="block rounded-2xl border p-4 transition ${m.available ? "border-white/10 bg-white/[.02] cursor-pointer hover:border-amber-400/40" : "border-white/5 opacity-40"}">
       <div class="flex items-center gap-2">
-        <input type="radio" name="mode" value="${esc(m.key)}" ${m.available ? "" : "disabled"} ${(pickedMode || cur) === m.key ? "checked" : ""}>
+        <input type="radio" name="mode" value="${esc(m.key)}" ${m.available ? "" : "disabled"} ${(pickedMode || cur) === m.key ? "checked" : ""} class="accent-amber-400">
         <span class="font-semibold text-sm">${esc(m.name)}</span>
-        ${cur === m.key ? '<span class="badge border-emerald-500/40 text-emerald-300">مفعّل</span>' : ""}
+        ${cur === m.key ? '<span class="badge b-up">مفعّل</span>' : ""}
       </div>
-      <p class="text-[11px] text-slate-400 mt-1">${esc(m.note)}</p>
+      <p class="text-[11px] text-[var(--muted)] mt-2">${esc(m.note)}</p>
     </label>`).join("");
   document.querySelectorAll('input[name="mode"]').forEach(el => el.onchange = () => { pickedMode = el.value; });
 
@@ -1857,13 +1921,13 @@ function renderSettings(st) {
   if (st.last_test) $("testOut").textContent = st.last_test.ok ? `✔ آخر اختبار ناجح: ${num(st.last_test.usdt_free)} USDT` : `✘ آخر اختبار فشل: ${st.last_test.error}`;
 
   const ta = st.tickerall;
-  $("taBadge").textContent = ta.present ? (ta.session ? "متصل ✔" : "محفوظ · غير متصل") : "غير مرتبط";
-  $("taBadge").className = "badge " + (ta.present ? (ta.session ? "border-emerald-500/40 text-emerald-300" : "border-amber-500/40 text-amber-300") : "border-slate-600 text-slate-300");
+  $("taBadge").textContent = ta.present ? (ta.session ? "متصل ●" : "محفوظ · غير متصل") : "غير مرتبط";
+  $("taBadge").className = "badge " + (ta.present ? (ta.session ? "b-up" : "b-gold") : "");
   if (!$("taSymGold").dataset.touched) $("taSymGold").value = ta.symbols.XAUUSD;
   if (!$("taSymBtc").dataset.touched) $("taSymBtc").value = ta.symbols.BTCUSDT;
   if (!$("taServer").value && ta.server) $("taServer").value = ta.server;
   $("taOut").textContent = ta.present
-    ? `🔑 مفتاح: ${ta.api_key_masked} · حساب: ${ta.login_masked} · سيرفر: ${ta.server}` +
+    ? `مفتاح: ${ta.api_key_masked} · حساب: ${ta.login_masked} · سيرفر: ${ta.server}` +
       (ta.session ? `\nالجلسة نشطة حتى ${dt(ta.session.expiresAt)}` : "\nلا توجد جلسة نشطة، اضغط اتصال واختبار.") +
       (ta.last_test ? `\n${ta.last_test.ok ? "✔ " + ta.last_test.note : "✘ " + ta.last_test.error}` : "")
     : "لم تُحفظ بيانات TickerAll بعد.";
