@@ -195,6 +195,62 @@ def test_browser_script_parses():
     assert out.returncode == 0, out.stderr[:300]
 
 
+def _fake_cycle_result():
+    return {"price": 1.0, "latest": {}, "has_champion": True, "errors": [], "note": None,
+            "ta_positions": [], "ta_account": None, "opened": None, "closed": []}
+
+
+def test_trading_is_off_by_default_and_respects_switches():
+    A.RUN.update(master=False, assets={})
+    calls = []
+    original = A.trading_cycle
+    A.trading_cycle = lambda asset, store, send_alerts=True: (calls.append(asset), _fake_cycle_result())[1]
+    try:
+        A.run_trading(send_alerts=False)
+        assert calls == [], "nothing may trade while the master switch is off"
+        A.RUN["master"] = True
+        A.RUN["assets"] = {"XAUUSD": True}
+        A.run_trading(send_alerts=False)
+        assert calls == ["XAUUSD"], calls
+    finally:
+        A.trading_cycle = original
+        A.RUN.update(master=False, assets={})
+
+
+def test_control_endpoints_require_password():
+    c = A.app.test_client()
+    assert c.post("/api/trading/master", json={"on": True}).status_code == 401
+    assert c.post("/api/trading/asset", json={"asset": "XAUUSD", "on": True}).status_code == 401
+    assert c.post("/api/strategy/select", json={"asset": "XAUUSD", "index": 0}).status_code == 401
+
+
+def test_manual_strategy_choice_is_locked_against_evolution():
+    A.store.save_strategy("BTCUSDT", {"rule": "rsi", "tf": 2}, "accepted", 1.5,
+                          {"val": {"win_rate": 50, "profit_factor": 1.8, "max_dd_r": 3}})
+    c = A.app.test_client()
+    r = c.post("/api/strategy/select", json={"asset": "BTCUSDT", "index": 0}, headers=PW)
+    assert r.status_code == 200, r.get_json()
+    assert A.store.get_champion("BTCUSDT")["genome"] == {"rule": "rsi", "tf": 2}
+    state = c.get("/api/state").get_json()
+    assert A.store.meta_get("lock|BTCUSDT") is True
+    assert isinstance(state["trading"]["locked"], dict)
+    original = A.load_market
+    A.load_market = lambda asset: (_ for _ in ()).throw(AssertionError("evolution must not run on a locked asset"))
+    try:
+        res = A.evolve_asset("BTCUSDT", A.store, 1, 4, False)
+        assert res["locked"] is True and res["changed"] is False
+    finally:
+        A.load_market = original
+    assert c.post("/api/strategy/unlock", json={"asset": "BTCUSDT"}, headers=PW).status_code == 200
+    assert A.store.meta_get("lock|BTCUSDT") in (None, False)
+
+
+def test_bad_strategy_index_is_refused():
+    c = A.app.test_client()
+    r = c.post("/api/strategy/select", json={"asset": "XAUUSD", "index": 999}, headers=PW)
+    assert r.status_code == 400
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:

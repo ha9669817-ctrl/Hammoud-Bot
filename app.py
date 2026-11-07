@@ -1458,6 +1458,8 @@ def trading_cycle(asset: str, store: Store, send_alerts: bool = True) -> dict:
 
 def evolve_asset(asset: str, store: Store, generations: int, population: int, send_alerts: bool = True):
     label = ASSETS[asset]["label"]
+    if store.meta_get(f"lock|{asset}"):
+        return {"changed": False, "label": label, "locked": True}
     h1, daily = load_market(asset)
     before = store.get_champion(asset)
     summary = run_evolution(asset, h1, daily, store, generations, population)
@@ -1473,6 +1475,7 @@ def evolve_asset(asset: str, store: Store, generations: int, population: int, se
 app = Flask(__name__)
 store = Store(DB_PATH, CONFIG["start_balance"])
 work_lock = threading.Lock()
+RUN = {"master": False, "assets": {}}  # يبدأ متوقفاً بعد كل نشر أو إعادة تشغيل
 live: dict = {}
 meta = {"last_evolve": 0.0, "last_test": None}
 activity = deque(maxlen=80)
@@ -1499,6 +1502,9 @@ def run_trading(send_alerts=True):
         log_event("scan", "بدء فحص الأصول")
         for asset in store.get_assets():
             label = ASSETS[asset]["label"]
+            if not (RUN["master"] and RUN["assets"].get(asset)):
+                log_info_once(asset, "متوقف: شغّل التداول لهذا الأصل من لوحة المحرك")
+                continue
             engine.update(current=label, message=f"تحميل بيانات {label} وتحليلها...")
             try:
                 res = trading_cycle(asset, store, send_alerts=send_alerts)
@@ -1788,6 +1794,9 @@ def _build_state() -> dict:
         "engine": {**engine, "mode": store.get_mode(), "scan_minutes": CONFIG["check_every_minutes"],
                    "busy": work_lock.locked(), "now": int(time.time()), "peak_mb": _rss_mb()},
         "activity": list(activity)[:40],
+        "trading": {"master": RUN["master"],
+                    "assets": {a: bool(RUN["assets"].get(a)) for a in store.get_assets()},
+                    "locked": {a: bool(store.meta_get(f"lock|{a}")) for a in store.get_assets()}},
     }
 
 
@@ -2021,6 +2030,59 @@ def run_now():
         note = "بدأ الفحص الآن"
     log_event("scan", "طلب فحص يدوي: " + note)
     return jsonify({"ok": True, "note": note})
+
+
+@app.post("/api/trading/master")
+def trading_master():
+    if not _authorized():
+        return _deny()
+    RUN["master"] = bool((request.get_json(silent=True) or {}).get("on"))
+    log_event("scan", "تشغيل التداول" if RUN["master"] else "إيقاف التداول")
+    return jsonify({"ok": True, "note": "التداول مفعّل" if RUN["master"] else "التداول متوقف"})
+
+
+@app.post("/api/trading/asset")
+def trading_asset():
+    if not _authorized():
+        return _deny()
+    body = request.get_json(silent=True) or {}
+    asset = body.get("asset")
+    if asset not in ASSETS:
+        return jsonify({"error": "أصل غير معروف"}), 400
+    RUN["assets"][asset] = bool(body.get("on"))
+    log_event("scan", "تشغيل هذا الأصل" if RUN["assets"][asset] else "إيقاف هذا الأصل", asset)
+    return jsonify({"ok": True, "note": "تم التحديث"})
+
+
+@app.post("/api/strategy/select")
+def strategy_select():
+    if not _authorized():
+        return _deny()
+    body = request.get_json(silent=True) or {}
+    asset, idx = body.get("asset"), body.get("index")
+    if asset not in ASSETS or not isinstance(idx, int):
+        return jsonify({"error": "بيانات غير صالحة"}), 400
+    board = store.top_strategies(asset, 8)
+    if not 0 <= idx < len(board):
+        return jsonify({"error": "الاستراتيجية غير موجودة في القائمة"}), 400
+    pick = board[idx]
+    store.set_champion(asset, {"genome": pick["genome"], "score": pick["score"],
+                               "result": pick["result"], "since": utc_now()})
+    store.meta_set(f"lock|{asset}", True)
+    log_event("evolve", "اعتُمدت استراتيجية من القائمة يدوياً", asset)
+    return jsonify({"ok": True, "note": "تم اعتماد الاستراتيجية يدوياً"})
+
+
+@app.post("/api/strategy/unlock")
+def strategy_unlock():
+    if not _authorized():
+        return _deny()
+    asset = (request.get_json(silent=True) or {}).get("asset")
+    if asset not in ASSETS:
+        return jsonify({"error": "أصل غير معروف"}), 400
+    store.meta_set(f"lock|{asset}", None)
+    log_event("evolve", "أُلغي الاختيار اليدوي، يعود التطوير لاختيار الاستراتيجية", asset)
+    return jsonify({"ok": True, "note": "أُلغي الاختيار اليدوي"})
 
 
 @app.get("/api/trades.csv")
@@ -2380,6 +2442,16 @@ INDEX_HTML = r'''
             </div>
           </div>
         </div>
+        <div class="panel" style="padding:20px">
+          <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between">
+            <div>
+              <div class="eyebrow">التشغيل</div>
+              <div id="tradingState" style="font-weight:600;margin-top:6px">—</div>
+            </div>
+            <button id="btnMaster" class="btn">تشغيل التداول</button>
+          </div>
+          <div id="assetCtl"></div>
+        </div>
         <div class="panel">
           <div class="panel-h"><div class="title">سجل النشاط الحي</div><span class="eyebrow">آخر 40 حدثاً</span></div>
           <div class="panel-b"><ul id="engFeed" class="feed stack" style="gap:8px;max-height:520px;overflow-y:auto"></ul></div>
@@ -2603,6 +2675,7 @@ function drawPrice() {
 // ---------- render: state ----------
 function renderState(s) {
   renderEngine(s.engine, s.activity);
+  renderTrading(s.trading, s.assets);
   renderAccount(s.account);
   renderChampion(s.assets, s.account);
   renderOpen(s);
@@ -2720,6 +2793,48 @@ function tickCountdown() {
 setInterval(tickCountdown, 1000);
 
 // ---------- research ----------
+function renderTrading(t, assets) {
+  if (!t) return;
+  $("btnMaster").textContent = t.master ? "إيقاف التداول" : "تشغيل التداول";
+  $("tradingState").textContent = t.master ? "التداول مفعّل" : "التداول متوقف (يبدأ متوقفاً بعد كل نشر)";
+  const html = Object.entries(assets).map(([k, a]) => {
+    const on = !!(t.assets && t.assets[k]);
+    const locked = !!(t.locked && t.locked[k]);
+    const board = a.leaderboard || [];
+    const opts = board.length
+      ? board.map((x, i) => `<option value="${i}">${esc(describe(x.genome))} · PF ${num(x.result.val.profit_factor)}</option>`).join("")
+      : `<option value="">لا توجد استراتيجيات معتمدة</option>`;
+    return `<div class="panel" style="padding:14px;margin-top:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <span class="title">${esc(a.label)}</span>
+        <button class="btn" data-toggle="${k}" data-on="${on ? 0 : 1}">${on ? "إيقاف هذا الأصل" : "تشغيل هذا الأصل"}</button>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:6px">${locked ? "استراتيجية مختارة يدوياً، لن يغيّرها التطوير" : "الاستراتيجية تُختار تلقائياً من التطوير"}</div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <select data-select="${k}" style="flex:1;min-width:200px">${opts}</select>
+        <button class="btn" data-choose="${k}" ${board.length ? "" : "disabled"}>اعتماد</button>
+        ${locked ? `<button class="btn" data-unlock="${k}">إلغاء الاختيار اليدوي</button>` : ""}
+      </div></div>`;
+  }).join("");
+  // نعيد البناء فقط عند تغيّر المحتوى، حتى لا يُلغى اختيار القائمة أثناء التحديث الدوري
+  if (html !== renderTrading.last) { renderTrading.last = html; $("assetCtl").innerHTML = html; }
+}
+
+$("btnMaster").onclick = async () => {
+  const on = !(state && state.trading && state.trading.master);
+  report(await postJson("/api/trading/master", { on }));
+};
+$("assetCtl").onclick = async (e) => {
+  const el = e.target.closest("button");
+  if (!el) return;
+  if (el.dataset.toggle) return report(await postJson("/api/trading/asset", { asset: el.dataset.toggle, on: el.dataset.on === "1" }));
+  if (el.dataset.choose) {
+    const idx = Number(document.querySelector(`select[data-select="${el.dataset.choose}"]`).value);
+    return report(await postJson("/api/strategy/select", { asset: el.dataset.choose, index: idx }));
+  }
+  if (el.dataset.unlock) return report(await postJson("/api/strategy/unlock", { asset: el.dataset.unlock }));
+};
+
 function renderBoard(assets) {
   const board = Object.entries(assets).flatMap(([k, v]) => v.leaderboard.map(x => ({...x, asset: v.label})));
   $("boardRows").innerHTML = board.length ? board.map(x => `<tr>
