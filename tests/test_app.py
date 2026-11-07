@@ -251,6 +251,15 @@ def test_bad_strategy_index_is_refused():
     assert r.status_code == 400
 
 
+def test_bitcoin_uses_lower_validation_threshold():
+    def res(val_trades):
+        m = lambda n: {"trades": n, "profit_factor": 1.5, "max_dd_r": 2.0, "expectancy_r": 0.2}
+        return {"train": m(100), "val": m(val_trades)}
+    assert A.passes(res(20), A.MIN_VAL_TRADES_BY_ASSET.get("BTCUSDT", A.MIN_VAL_TRADES)) is True
+    assert A.passes(res(20), A.MIN_VAL_TRADES_BY_ASSET.get("XAUUSD", A.MIN_VAL_TRADES)) is False
+    assert A.passes(res(30), A.MIN_VAL_TRADES_BY_ASSET.get("XAUUSD", A.MIN_VAL_TRADES)) is True
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:

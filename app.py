@@ -49,6 +49,7 @@ TREND_EMA = 200
 TRAIN_SHARE = 0.7      # 70% تدريب، 30% تحقق
 MIN_TRAIN_TRADES = 15
 MIN_VAL_TRADES = 30
+MIN_VAL_TRADES_BY_ASSET = {"BTCUSDT": 20}  # البتكوين يتداول طوال الأسبوع، فعدد صفقات التحقق أقل
 MIN_PF = 1.1
 MAX_VAL_DD_R = 15.0
 DISCLAIMER = "⚠️ تنفيذ تعليمي، وليس توصية مالية."
@@ -594,10 +595,10 @@ def evaluate(genome: dict, h1: pd.DataFrame, daily: pd.DataFrame):
     return {"train": metrics(train), "val": metrics(val)}, latest
 
 
-def passes(res: dict) -> bool:
+def passes(res: dict, min_val: int = MIN_VAL_TRADES) -> bool:
     t, v = res["train"], res["val"]
     return (t["trades"] >= MIN_TRAIN_TRADES and t["profit_factor"] >= MIN_PF
-            and v["trades"] >= MIN_VAL_TRADES and v["profit_factor"] >= MIN_PF
+            and v["trades"] >= min_val and v["profit_factor"] >= MIN_PF
             and v["max_dd_r"] <= MAX_VAL_DD_R and v["expectancy_r"] > 0)
 
 
@@ -630,7 +631,7 @@ def run_evolution(asset, h1, daily, store, generations, population, seed=None) -
             seen.add(k)
             res, _ = evaluate(g, h1, daily)
             evaluated += 1
-            ok, sc = passes(res), score(res)
+            ok, sc = passes(res, MIN_VAL_TRADES_BY_ASSET.get(asset, MIN_VAL_TRADES)), score(res)
             store.save_strategy(asset, g, "accepted" if ok else "rejected", sc, res)
             if ok:
                 accepted.append((sc, g, res))
