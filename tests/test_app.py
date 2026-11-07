@@ -260,6 +260,25 @@ def test_bitcoin_uses_lower_validation_threshold():
     assert A.passes(res(30), A.MIN_VAL_TRADES_BY_ASSET.get("XAUUSD", A.MIN_VAL_TRADES)) is True
 
 
+def test_gold_fallback_is_marked_as_proxy_and_closed():
+    class Resp:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return [[1700000000000 + i * 60000, "1", "1", "1", str(100 + i), "1"] for i in range(5)]
+    original = (A.requests.get, A.in_session, A.ta_creds, A.MARKET_CACHE.copy())
+    A.requests.get = lambda *a, **k: Resp()
+    A.in_session = lambda asset, now=None: False if asset == "XAUUSD" else True
+    A.ta_creds = lambda store: None
+    try:
+        out = A.live_market(force=True)
+        assert out["XAUUSD"]["proxy"] is True and out["XAUUSD"]["session_open"] is False
+        assert out["XAUUSD"]["source"] == "Binance"
+    finally:
+        A.requests.get, A.in_session, A.ta_creds = original[0], original[1], original[2]
+        A.MARKET_CACHE.update(original[3])
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:

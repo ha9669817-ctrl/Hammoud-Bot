@@ -1843,7 +1843,9 @@ def live_market(force: bool = False) -> dict:
                 times = [int(t.timestamp() * 1000) for t in df["open_time"]]
             last, first = closes[-1], closes[0]
             out[asset] = {"label": info["label"], "price": last, "change_pct": round((last / first - 1) * 100, 3),
-                          "closes": closes, "times": times, "updated": int(now), "source": source}
+                          "closes": closes, "times": times, "updated": int(now), "source": source,
+                          "session_open": in_session(asset),
+                          "proxy": source == "Binance" and asset == "XAUUSD"}
         except Exception as exc:
             out[asset] = {"label": info["label"], "error": f"تعذّر جلب السعر: {type(exc).__name__}",
                           "updated": int(now)}
@@ -2617,13 +2619,18 @@ function renderPrices() {
   const assets = market.assets || {};
   const sess = (state && state.assets) || {};
   $("priceCards").innerHTML = Object.entries(assets).map(([k, a]) => {
-    const open = sess[k] ? sess[k].session_open : null;
+    const open = a.session_open !== undefined ? a.session_open : (sess[k] ? sess[k].session_open : null);
+    const proxyNote = a.proxy
+      ? `<div class="muted" style="font-size:12px;margin-top:6px">${open === false
+          ? "السوق الرسمي مغلق الآن. الرقم المعروض من PAXG الذي يتداول 24/7، وليس سعر الذهب الرسمي"
+          : "السعر من PAXG كمرجع تقريبي، وليس سعر الذهب الرسمي"}</div>`
+      : "";
     const pill = open === null ? "" : `<span class="pill ${open ? "up" : "down"}"><span class="dot ${open ? "up" : "down"}"></span>${open ? "السوق مفتوح" : "السوق مغلق"}</span>`;
     const body = a.error
       ? `<div class="down" style="margin-top:10px;font-size:13px">${esc(a.error)}</div>`
       : `<div class="pval">${num(a.price)}</div>
          <div class="pchg ${sgn(a.change_pct)}" style="margin-top:4px">${a.change_pct > 0 ? "+" : ""}${num(a.change_pct, 3)}% <span class="muted">· آخر 3 ساعات</span></div>`;
-    const opensTxt = !open && sess[k] && sess[k].next_open ? `<div class="muted" style="font-size:12px;margin-top:6px">يفتح ${fmtOpen(sess[k].next_open)} (بتوقيت الرياض)</div>` : "";
+    const opensTxt = (!open && sess[k] && sess[k].next_open ? `<div class="muted" style="font-size:12px;margin-top:6px">يفتح ${fmtOpen(sess[k].next_open)} (بتوقيت الرياض)</div>` : "") + proxyNote;
     return `<div class="panel pcard ${chartAsset === k ? "sel" : ""}" data-pick="${k}">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
         <span class="title">${esc(a.label)}</span>${pill}
