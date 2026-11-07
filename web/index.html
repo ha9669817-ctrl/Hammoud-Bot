@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="مركز التحليل الذاتي: تحليل آلي وتنفيذ تجريبي على الذهب والبيتكوين">
+<meta name="theme-color" content="#04060a">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23e7b75a%27/%3E%3Ctext x=%2732%27 y=%2742%27 font-size=%2726%27 text-anchor=%27middle%27 font-family=%27Arial%27 font-weight=%27700%27 fill=%27%2304060a%27%3EMA%3C/text%3E%3C/svg%3E">
+<title>مركز التحليل الذاتي</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ Sidebar ============ -->
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">MA</div>
+      <div>
+        <div style="font-weight:700">مركز التحليل</div>
+        <div class="eyebrow">Self-improving engine</div>
+      </div>
+    </div>
+    <nav class="nav stack" style="gap:4px">
+      <a data-view="terminal" class="on"><span>الرئيسية</span><span class="nav-count" id="navAlerts"></span></a>
+      <a data-view="engine"><span>المحرك</span><span class="nav-count" id="navCycles"></span></a>
+      <a data-view="brokers"><span>الوسطاء والربط</span></a>
+      <a data-view="research"><span>البحث والسجل</span></a>
+    </nav>
+    <div style="margin-top:auto" class="foot">
+      نظام تعليمي يعمل بتنفيذ ورقي أو على حسابات تجريبية فقط. الوضع الحقيقي غير مفعّل. نتائج الاختبار التاريخي لا تضمن أرباحاً مستقبلية.
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="statusBar" class="statusbar">
+      <span id="sbTrade" class="pill">التداول: —</span>
+      <span id="sbEngine" class="pill">المحرك: —</span>
+      <span id="sbMode" class="pill">الوضع: —</span>
+      <span id="sbLast" class="muted" style="font-size:12px"></span>
+    </div>
+    <!-- ============ Top bar ============ -->
+    <header class="topbar">
+      <div class="flex items-center gap-3" style="display:flex;align-items:center;gap:10px">
+        <span id="liveDot" class="dot"></span>
+        <span id="liveText" class="muted" style="font-size:13px">جارٍ الاتصال...</span>
+        <span id="engPill" class="pill">المحرك: —</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <input id="pw" type="password" placeholder="كلمة مرور الإدارة" autocomplete="current-password" class="inp" style="width:190px">
+        <select id="scope" class="inp" style="width:170px">
+          <option value="all">الذهب + البيتكوين</option>
+          <option value="XAUUSD">الذهب فقط</option>
+          <option value="BTCUSDT">البيتكوين فقط</option>
+        </select>
+        <button id="btnScope" class="btn">حفظ الأصول</button>
+        <button id="btnRun" class="btn">فحص الآن</button>
+        <button id="btnEvolve" class="btn btn-primary">تطوير</button>
+        <button id="btnExport" class="btn">تصدير الاستراتيجيات</button>
+        <button id="btnCsv" class="btn">تصدير الصفقات CSV</button>
+      </div>
+    </header>
+    <p id="msg" class="info" style="margin:0;padding:6px 22px;font-size:12px;min-height:18px"></p>
+
+    <!-- mobile nav -->
+    <nav class="mob-nav">
+      <button data-view="terminal" class="on">الرئيسية</button>
+      <button data-view="engine">المحرك</button>
+      <button data-view="brokers">الربط</button>
+      <button data-view="research">السجل</button>
+    </nav>
+
+    <div class="content">
+
+      <!-- ============ View: terminal ============ -->
+      <section data-pane="terminal" class="stack">
+        <div id="priceCards" class="grid-prices"></div>
+
+        <div class="grid-main">
+          <div class="panel">
+            <div class="panel-h">
+              <div>
+                <div class="title">السعر الحي</div>
+                <div class="eyebrow" id="chartMeta">تحديث كل 10 ثوانٍ من Binance</div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <div class="seg" id="chartTabs">
+                  <button data-asset="XAUUSD" class="on">الذهب</button>
+                  <button data-asset="BTCUSDT">البيتكوين</button>
+                </div>
+                <button id="btnMarket" class="btn" style="padding:6px 10px">تحديث الآن</button>
+              </div>
+            </div>
+            <div class="panel-b"><div class="chart-box"><canvas id="priceChart"></canvas></div></div>
+          </div>
+
+          <div class="stack">
+            <div class="panel">
+              <div class="panel-b" style="padding-bottom:6px">
+                <div class="eyebrow">رصيد الحساب</div>
+                <div id="acctBalance" class="mono" style="font-size:30px;margin-top:6px">—</div>
+                <div id="acctSub" class="muted" style="font-size:12px;margin-top:4px"></div>
+              </div>
+              <div class="panel-b" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;border-top:1px solid var(--line)">
+                <div><div class="eyebrow" title="نسبة تغيّر الرصيد منذ بداية الحساب">العائد</div><div id="acctReturn" class="mono" style="font-size:16px;margin-top:4px">—</div></div>
+                <div><div class="eyebrow" title="نسبة الصفقات الرابحة من الصفقات المغلقة">نجاح</div><div id="acctWin" class="mono" style="font-size:16px;margin-top:4px">—</div></div>
+                <div><div class="eyebrow" title="إجمالي الأرباح ÷ إجمالي الخسائر، أكبر من 1 يعني ربحاً إجمالياً">معامل الربح</div><div id="acctPF" class="mono" style="font-size:16px;margin-top:4px">—</div></div>
+                <div><div class="eyebrow" title="عدد الصفقات التي أُغلقت حتى الآن">صفقات مغلقة</div><div id="acctTrades" class="mono" style="font-size:16px;margin-top:4px">—</div></div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-h"><div class="title">الاستراتيجية المعتمدة</div></div>
+              <div id="champBlock" class="panel-b" style="display:grid;gap:10px"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-h">
+              <div class="title">الصفقات المفتوحة</div>
+              <span id="openCount" class="pill">0</span>
+            </div>
+            <div class="panel-b scroll"><table class="tbl">
+              <thead><tr><th>الأصل</th><th>الاتجاه</th><th>الدخول</th><th>الوقف</th><th>الهدف</th><th>الوضع</th></tr></thead>
+              <tbody id="openRows"></tbody>
+            </table></div>
+            <div id="unmanagedBox" class="panel-b hidden" style="border-top:1px solid var(--line)">
+              <div class="eyebrow gold" style="margin-bottom:8px">مراكز على المنصة غير مُدارة من النظام</div>
+              <div class="scroll"><table class="tbl">
+                <thead><tr><th>الرمز</th><th>الاتجاه</th><th>الحجم</th><th>الربح</th><th>الوقف</th><th>الهدف</th></tr></thead>
+                <tbody id="unmanagedRows"></tbody>
+              </table></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><div class="title">الصفقات المغلقة</div><span class="eyebrow">آخر 60</span>
+            <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+              <select id="closedFilter" class="inp" style="width:auto;font-size:12px"><option value="all">كل النتائج</option><option value="win">رابحة</option><option value="loss">خاسرة</option></select>
+              <select id="closedAsset" class="inp" style="width:auto;font-size:12px"><option value="all">كل الأصول</option><option value="XAUUSD">الذهب</option><option value="BTCUSDT">البيتكوين</option></select>
+            </div></div>
+            <div class="panel-b scroll" style="max-height:340px;overflow-y:auto"><table class="tbl">
+              <thead style="position:sticky;top:0;background:var(--surface)"><tr><th>الأصل</th><th>الاتجاه</th><th title="الربح أو الخسارة مقاساً بالمخاطرة الأصلية للصفقة">R</th><th>الربح</th><th>الإغلاق</th></tr></thead>
+              <tbody id="closedRows"></tbody>
+            </table></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><div><div class="title">منحنى الرصيد</div><div class="eyebrow">الرصيد بعد كل صفقة مغلقة</div></div><span id="equityMeta" class="pill"></span></div>
+          <div class="panel-b"><div class="chart-box" style="height:220px"><canvas id="equityChart"></canvas></div>
+            <p id="equityEmpty" class="empty hidden">لا توجد صفقات مغلقة بعد.</p></div>
+        </div>
+      </section>
+
+      <!-- ============ View: engine ============ -->
+      <section data-pane="engine" class="hidden stack">
+        <div class="panel" style="padding:20px">
+          <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:center;justify-content:space-between">
+            <div style="display:flex;gap:16px;align-items:center">
+              <div id="radar" class="radar"><i></i><i></i><i></i><b></b></div>
+              <div>
+                <div class="eyebrow">محرك التداول · قواعد تحليل وبحث تطوري وبوابات تحقق (بدون نموذج لغوي)</div>
+                <div id="engMsg" style="font-size:17px;font-weight:600;margin-top:6px">—</div>
+                <div class="muted" style="font-size:12px;margin-top:4px"><span id="engLast"></span> · <span id="engNext" class="mono"></span></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:26px">
+              <div><div class="eyebrow">الفحوصات</div><div id="engCycles" class="mono" style="font-size:20px;margin-top:4px">0</div></div>
+              <div><div class="eyebrow">الوضع</div><div id="engMode" style="font-weight:600;margin-top:6px">—</div></div>
+              <div><button id="engBtnRun" class="btn btn-primary">فحص الآن</button></div>
+            </div>
+          </div>
+        </div>
+        <div class="panel" style="padding:20px">
+          <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between">
+            <div>
+              <div class="eyebrow">التشغيل</div>
+              <div id="tradingState" style="font-weight:600;margin-top:6px">—</div>
+            </div>
+            <button id="btnMaster" class="btn">تشغيل التداول</button>
+          </div>
+          <div id="assetCtl"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-h"><div class="title">سجل النشاط الحي</div><span class="eyebrow">آخر 40 حدثاً</span></div>
+          <div class="panel-b"><ul id="engFeed" class="feed stack" style="gap:8px;max-height:520px;overflow-y:auto"></ul></div>
+        </div>
+      </section>
+
+      <!-- ============ View: brokers ============ -->
+      <section data-pane="brokers" class="hidden stack">
+        <div class="panel">
+          <div class="panel-h"><div><div class="title">وضع التنفيذ</div><div class="eyebrow">اختر الوضع ثم اضغط تطبيق. الوضع الحقيقي غير مفعّل في هذه النسخة.</div></div></div>
+          <div class="panel-b" style="display:grid;gap:14px">
+            <div id="modes" class="modes"></div>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+              <button id="btnSetMode" class="btn btn-primary">تطبيق الوضع المختار</button>
+              <span id="modeOut" class="muted" style="font-size:12px"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h">
+            <div><div class="title">TickerAll · MT5 تجريبي (Exness)</div><div class="eyebrow">الوقف والهدف يُحملان على جهة الوسيط. الحسابات الحقيقية مرفوضة.</div></div>
+            <span id="taBadge" class="pill">غير مرتبط</span>
+          </div>
+          <div class="panel-b" style="display:grid;gap:16px">
+            <div class="form">
+              <label><span class="label">API Key</span><input id="taKey" type="text" autocomplete="off" spellcheck="false" class="inp" placeholder="cf_api_…"></label>
+              <label><span class="label">رقم الحساب التجريبي</span><input id="taLogin" type="text" inputmode="numeric" autocomplete="off" class="inp"></label>
+              <label><span class="label">السيرفر</span><input id="taServer" type="text" autocomplete="off" class="inp" placeholder="Exness-MT5Trial16"></label>
+              <label><span class="label">كلمة مرور الحساب التجريبي</span><input id="taPass" type="password" autocomplete="new-password" class="inp"></label>
+              <label><span class="label">رمز الذهب لدى الوسيط</span><input id="taSymGold" type="text" class="inp" value="XAUUSD"></label>
+              <label><span class="label">رمز البيتكوين لدى الوسيط</span><input id="taSymBtc" type="text" class="inp" value="BTCUSD"></label>
+            </div>
+            <div class="eyebrow">الحقول أعلاه لحساب المنصة. كلمة مرور الإدارة في أعلى الصفحة حقل منفصل يحمي الحفظ.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button id="btnSaveTa" class="btn btn-primary">حفظ</button>
+              <button id="btnTestTa" class="btn">اتصال واختبار الرموز</button>
+              <button id="btnClearTa" class="btn btn-danger">حذف</button>
+            </div>
+            <pre id="taOut" class="out"></pre>
+          </div>
+        </div>
+
+        <details class="panel" style="padding:16px">
+          <summary style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+            <span class="title">Binance Testnet <span class="muted" style="font-weight:400;font-size:12px">· للبيتكوين، أموال وهمية</span></span>
+            <span id="keyStatus" class="muted" style="font-size:12px"></span>
+          </summary>
+          <div class="form" style="margin-top:16px;grid-template-columns:repeat(4,minmax(0,1fr))">
+            <label><span class="label">نوع السوق</span><select id="market" class="inp"></select></label>
+            <label><span class="label">API Key</span><input id="apiKey" type="text" autocomplete="off" spellcheck="false" class="inp"></label>
+            <label><span class="label">API Secret</span><input id="apiSecret" type="password" autocomplete="off" class="inp"></label>
+            <div style="display:flex;gap:8px;align-items:flex-end">
+              <button id="btnSaveKeys" class="btn btn-primary" style="flex:1">حفظ</button>
+              <button id="btnTest" class="btn" style="flex:1">اختبار</button>
+              <button id="btnClearKeys" class="btn btn-danger">حذف</button>
+            </div>
+          </div>
+          <p id="testOut" class="muted" style="font-size:12px;margin:12px 0 0"></p>
+        </details>
+      </section>
+
+      <!-- ============ View: research ============ -->
+      <section data-pane="research" class="hidden grid-main" style="grid-template-columns:minmax(0,1fr) minmax(0,340px)">
+        <div class="panel">
+          <div class="panel-h"><div class="title">لوحة المتصدرين</div><span class="eyebrow">استراتيجيات اجتازت أو لم تجتز</span></div>
+          <div class="panel-b scroll"><table class="tbl">
+            <thead><tr><th>الأصل</th><th>الاستراتيجية</th><th>نجاح%</th><th>PF</th><th>تراجع R</th><th>الدرجة</th></tr></thead>
+            <tbody id="boardRows"></tbody>
+          </table></div>
+        </div>
+        <div class="panel">
+          <div class="panel-h"><div class="title">سجل التطوير</div></div>
+          <div class="panel-b"><ul id="evoLog" class="stack" style="gap:8px;max-height:520px;overflow-y:auto"></ul></div>
+        </div>
+      </section>
+
+    </div>
+      <footer id="verFoot" class="muted" style="font-size:12px;padding:16px 4px;text-align:center"></footer>
+  </main>
+</div>
+
+<script src="/static/app.js" defer></script>
+</body>
+</html>

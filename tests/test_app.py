@@ -188,11 +188,17 @@ def test_state_reports_memory_and_next_open():
 def test_browser_script_parses():
     if not shutil.which("node"):
         return
-    scripts = re.findall(r"<script>(.*?)</script>", A.INDEX_HTML, re.S)
-    path = Path(TMP) / "page.js"
-    path.write_text("\n".join(scripts), encoding="utf-8")
-    out = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True)
+    out = subprocess.run(["node", "--check", str(ROOT / "web" / "static" / "app.js")],
+                         capture_output=True, text=True)
     assert out.returncode == 0, out.stderr[:300]
+
+
+def test_page_and_assets_are_served():
+    c = A.app.test_client()
+    page = c.get("/").get_data(as_text=True)
+    assert "/static/app.js" in page and 'id="statusBar"' in page and 'id="closedFilter"' in page
+    assert c.get("/static/app.js").status_code == 200
+    assert c.get("/static/app.css").status_code == 200
 
 
 def _fake_cycle_result():
