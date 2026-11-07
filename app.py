@@ -11,6 +11,7 @@ import threading
 import time
 import traceback
 import uuid
+from collections import deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal
@@ -1102,10 +1103,27 @@ store = Store(DB_PATH, CONFIG["start_balance"])
 work_lock = threading.Lock()
 live: dict = {}
 meta = {"last_evolve": 0.0, "last_test": None}
+activity = deque(maxlen=80)
+engine = {"status": "idle", "message": "بانتظار أول فحص", "cycles": 0,
+          "last_run": None, "next_run": None}
+
+
+def log_event(kind, text, asset=None):
+    activity.appendleft({"t": int(time.time()), "kind": kind, "asset": asset, "text": str(text)[:300]})
+    print(f"[engine] {asset or '-'} {kind}: {text}", flush=True)
+
+
+def _fmt(v):
+    try:
+        return f"{float(v):.2f}"
+    except (TypeError, ValueError):
+        return "—"
 
 
 def run_trading(send_alerts=True):
     with work_lock:
+        engine.update(status="analyzing", message="جارٍ تحليل السوق والبحث عن فرص...")
+        log_event("scan", "بدء فحص الأصول")
         for asset in store.get_assets():
             try:
                 res = trading_cycle(asset, store, send_alerts=send_alerts)
@@ -1113,16 +1131,37 @@ def run_trading(send_alerts=True):
                                "has_champion": res["has_champion"], "errors": res["errors"],
                                "note": res["note"], "updated": int(time.time()),
                                "ta_positions": res["ta_positions"], "ta_account": res["ta_account"]}
+                for t in res.get("closed") or []:
+                    log_event("close", f"إغلاق صفقة {t.get('side', '')} · {_fmt(t.get('r'))}R", asset)
+                if res.get("opened"):
+                    o = res["opened"]
+                    log_event("open", f"فتح صفقة {o.get('side', '')} عند {_fmt(o.get('entry'))}", asset)
+                for e in res["errors"]:
+                    log_event("warn", e, asset)
+                if not res.get("opened") and not res["errors"]:
+                    if not res["has_champion"]:
+                        log_event("info", "لا توجد استراتيجية معتمدة، التداول متوقف لهذا الأصل", asset)
+                    elif res.get("note"):
+                        log_event("info", res["note"], asset)
+                    else:
+                        log_event("info", "فُحص السوق: لا توجد إشارة جديدة", asset)
             except Exception as exc:
                 traceback.print_exc()
                 live[asset] = {"error": str(exc), "updated": int(time.time())}
+                log_event("error", f"خطأ في الفحص: {str(exc)[:160]}", asset)
+        engine["cycles"] += 1
+        engine["last_run"] = int(time.time())
+        engine.update(status="idle", message="بانتظار الفحص التالي")
 
 
 def run_evolution_job(send_alerts=True):
     with work_lock:
+        engine.update(status="analyzing", message="جارٍ البحث التطوري عن استراتيجيات أفضل...")
         for asset in store.get_assets():
             try:
-                evolve_asset(asset, store, CONFIG["evolve_generations"], CONFIG["evolve_population"], send_alerts)
+                res = evolve_asset(asset, store, CONFIG["evolve_generations"], CONFIG["evolve_population"], send_alerts)
+                log_event("evolve", "اعتُمدت استراتيجية جديدة" if res.get("changed") else "لم تتغير الاستراتيجية المعتمدة", asset)
+                engine.update(status="idle", message="بانتظار الفحص التالي")
             except Exception:
                 traceback.print_exc()
         meta["last_evolve"] = time.time()
@@ -1133,6 +1172,7 @@ def _scheduler():
         run_trading()
         if time.time() - meta["last_evolve"] >= CONFIG["evolve_every_hours"] * 3600:
             run_evolution_job()
+        engine["next_run"] = int(time.time() + CONFIG["check_every_minutes"] * 60)
         time.sleep(CONFIG["check_every_minutes"] * 60)
 
 
@@ -1215,6 +1255,19 @@ def _settings() -> dict:
 def _build_state() -> dict:
     balance = store.balance()
     start = CONFIG["start_balance"]
+    source, broker_equity = "paper", None
+    if store.get_mode() == "tickerall":
+        snap = next((live[a]["ta_account"] for a in store.get_assets()
+                     if (live.get(a) or {}).get("ta_account")), None)
+        if snap and snap.get("balance") is not None:
+            balance = float(snap["balance"])
+            broker_equity = snap.get("equity")
+            source = "tickerall"
+            if store.meta_get("ta_start") is None:
+                store.meta_set("ta_start", balance)
+            start = float(store.meta_get("ta_start") or balance)
+        else:
+            source = "tickerall-pending"
     closed = store.closed_trades()
     equity, running = [], start
     for t in closed:
@@ -1232,7 +1285,7 @@ def _build_state() -> dict:
         "config": {"assets": store.get_assets(), "risk_pct": CONFIG["risk_pct"],
                    "evolve_every_hours": CONFIG["evolve_every_hours"]},
         "settings": _settings(),
-        "account": {"balance": balance, "start": start,
+        "account": {"balance": balance, "start": start, "source": source, "equity": broker_equity,
                     "return_pct": round((balance / start - 1) * 100, 2),
                     "trades": len(closed),
                     "win_rate": round(100 * len(wins) / len(closed), 1) if closed else 0.0,
@@ -1241,6 +1294,8 @@ def _build_state() -> dict:
         "closed": list(reversed(closed[-60:])),
         "equity": equity,
         "evolutions": store.recent_evolutions(12),
+        "engine": {**engine, "mode": store.get_mode(), "scan_minutes": CONFIG["check_every_minutes"]},
+        "activity": list(activity)[:40],
     }
 
 
@@ -1396,6 +1451,7 @@ def clear_tickerall():
     meta["ta_test"] = None
     if store.get_mode() == "tickerall":
         store.set_mode("paper")
+    store.meta_set("ta_start", None)
     return jsonify({"ok": True, "note": "تم حذف بيانات TickerAll"})
 
 
@@ -1527,6 +1583,14 @@ INDEX_HTML = r'''
   details > summary::-webkit-details-marker { display: none; }
   .fade-in { animation: fade .45s ease both; }
   @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .radar { position: relative; width: 56px; height: 56px; flex: none; }
+  .radar i { position: absolute; inset: 0; border-radius: 999px; border: 1px solid rgba(52,211,153,.5); opacity: 0; }
+  .radar b { position: absolute; inset: 38%; border-radius: 999px; background: #475569; }
+  .radar.on b { background: #34d399; box-shadow: 0 0 14px #34d399; }
+  .radar.on i { animation: ripple 1.8s ease-out infinite; }
+  .radar.on i:nth-child(2) { animation-delay: .6s; }
+  .radar.on i:nth-child(3) { animation-delay: 1.2s; }
+  @keyframes ripple { 0% { transform: scale(.35); opacity: .9; } 100% { transform: scale(1.5); opacity: 0; } }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -1576,6 +1640,27 @@ INDEX_HTML = r'''
 
   <!-- ============ Tab: overview ============ -->
   <section data-pane="overview" class="space-y-5 fade-in">
+    <div class="glass ring-emerald p-5 md:p-6">
+      <div class="flex flex-col md:flex-row md:items-center gap-5 md:justify-between">
+        <div class="flex items-center gap-4">
+          <div id="radar" class="radar"><i></i><i></i><i></i><b></b></div>
+          <div>
+            <div class="eyebrow">محرك التداول الآلي · قواعد تحليل + بحث تطوري بوابات تحقق</div>
+            <div id="engMsg" class="text-lg font-bold mt-1">بانتظار أول فحص</div>
+            <div class="text-xs text-[var(--muted)] mt-1"><span id="engLast"></span> · <span id="engNext" class="num"></span></div>
+          </div>
+        </div>
+        <div class="flex gap-8">
+          <div><div class="eyebrow">الفحوصات</div><div id="engCycles" class="num text-xl font-bold mt-1">0</div></div>
+          <div><div class="eyebrow">الوضع</div><div id="engMode" class="text-sm font-semibold mt-2">—</div></div>
+        </div>
+      </div>
+      <div class="mt-5 border-t border-white/5 pt-4">
+        <div class="eyebrow mb-2">سجل النشاط الحي</div>
+        <ul id="engFeed" class="space-y-2 max-h-72 overflow-y-auto"></ul>
+      </div>
+    </div>
+
     <div id="kpis" class="grid grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4"></div>
 
     <div class="glass ring-emerald p-5">
@@ -1771,12 +1856,16 @@ function render(s) {
   const a = s.account;
   const barW = Math.max(0, Math.min(100, a.win_rate || 0));
   $("kpis").innerHTML = [
-    kpi("الرصيد", `$${num(a.balance)}`, `البداية $${num(a.start, 0)}`, "ring-gold"),
+    kpi("الرصيد", `$${num(a.balance)}`,
+        a.source === "tickerall" ? "رصيد الحساب التجريبي على الوسيط · مباشر"
+        : a.source === "tickerall-pending" ? "بانتظار أول قراءة من الوسيط"
+        : `ورقي · البداية $${num(a.start, 0)}`, "ring-gold"),
     kpi("العائد", `<span class="${tone(a.return_pct)}">${num(a.return_pct)}%</span>`, `${a.trades} صفقة مغلقة`, a.return_pct >= 0 ? "ring-emerald" : "ring-rose"),
     kpi("نسبة النجاح", `${num(a.win_rate, 1)}%`, "من الصفقات المغلقة", "ring-sky", `<div class="bar mt-3"><span style="width:${barW}%"></span></div>`),
     kpi("معامل الربح", num(a.profit_factor), "الأرباح ÷ الخسائر", "ring-emerald"),
   ].join("");
   drawEquity(s.equity, a.start);
+  renderEngine(s.engine, s.activity);
   renderAssets(s.assets);
   renderOpen(s);
   renderClosed(s.closed);
@@ -1933,6 +2022,32 @@ function renderSettings(st) {
     : "لم تُحفظ بيانات TickerAll بعد.";
 }
 
+// ---------- engine panel ----------
+let nextRunAt = null;
+const KIND = { open: "b-up", close: "b-gold", warn: "b-down", error: "b-down", evolve: "b-sky", scan: "b-sky", info: "" };
+const MODE_AR = { paper: "ورقي", tickerall: "MT5 تجريبي", demo: "Binance Testnet" };
+function renderEngine(e, acts) {
+  if (!e) return;
+  $("radar").classList.toggle("on", e.status === "analyzing");
+  $("engMsg").textContent = e.message;
+  $("engLast").textContent = e.last_run ? "آخر فحص " + new Date(e.last_run * 1000).toLocaleTimeString("ar-SA") : "لم يبدأ الفحص بعد";
+  $("engCycles").textContent = e.cycles;
+  $("engMode").textContent = MODE_AR[e.mode] || e.mode;
+  nextRunAt = e.next_run ? e.next_run * 1000 : null;
+  $("engFeed").innerHTML = acts.length ? acts.map(a => `
+    <li class="flex items-start gap-3 text-xs rounded-xl bg-white/[.02] border border-white/5 p-2.5">
+      <span class="num text-[var(--muted)] shrink-0">${new Date(a.t * 1000).toLocaleTimeString("ar-SA")}</span>
+      <span class="badge ${KIND[a.kind] || ""} shrink-0">${esc(a.asset || "النظام")}</span>
+      <span class="text-slate-300">${esc(a.text)}</span>
+    </li>`).join("") : `<li class="text-[var(--muted)] text-xs">لا توجد أحداث بعد</li>`;
+}
+function tickCountdown() {
+  if (!nextRunAt) { $("engNext").textContent = ""; return; }
+  const left = Math.max(0, Math.round((nextRunAt - Date.now()) / 1000));
+  $("engNext").textContent = `الفحص التالي خلال ${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
+}
+setInterval(tickCountdown, 1000);
+
 // ---------- requests ----------
 async function postJson(url, body) {
   const pwd = $("pw").value.trim();
@@ -2014,7 +2129,7 @@ $("taSymGold").oninput = () => $("taSymGold").dataset.touched = "1";
 $("taSymBtc").oninput = () => $("taSymBtc").dataset.touched = "1";
 
 load();
-setInterval(load, 30000);
+setInterval(load, 5000);
 </script>
 </body>
 </html>
