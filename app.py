@@ -52,6 +52,43 @@ MIN_PF = 1.1
 MAX_VAL_DD_R = 15.0
 DISCLAIMER = "⚠️ تنفيذ تعليمي، وليس توصية مالية."
 DB_PATH = os.getenv("DB_PATH", str(Path(__file__).resolve().parent / "data" / "bot.db"))
+CHAMPION_DIR = Path(DB_PATH).resolve().parent / "champions"
+
+
+def _champion_file(asset):
+    return CHAMPION_DIR / f"{asset}.json"
+
+
+def _champion_file_write(asset, data):
+    """نسخة ملفية من الاستراتيجية المعتمدة، تُستعاد عند إعادة التشغيل دون إعادة التطوير."""
+    try:
+        path = _champion_file(asset)
+        if data is None:
+            path.unlink(missing_ok=True)
+            return
+        CHAMPION_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        print(f"[champions] تعذر حفظ ملف {asset}: {exc}", flush=True)
+
+
+def restore_champions(store_obj):
+    """عند التشغيل: إذا لم توجد استراتيجية في قاعدة البيانات نستعيدها من الملفات."""
+    restored = []
+    for asset in ASSETS:
+        if store_obj.get_champion(asset):
+            continue
+        path = _champion_file(asset)
+        if not path.exists():
+            continue
+        try:
+            store_obj.meta_set(f"champion|{asset}", json.loads(path.read_text(encoding="utf-8")))
+            restored.append(asset)
+        except (OSError, ValueError) as exc:
+            print(f"[champions] تعذر قراءة ملف {asset}: {exc}", flush=True)
+    return restored
 
 BINANCE_URL = "https://data-api.binance.vision/api/v3/klines"
 TIMEOUT = 20
@@ -695,6 +732,7 @@ class Store:
                 c.execute("DELETE FROM meta WHERE key=?", (f"champion|{asset}",))
         else:
             self.meta_set(f"champion|{asset}", data)
+        _champion_file_write(asset, data)
 
     def save_strategy(self, asset, genome, status, score_v, result) -> None:
         with self._tx() as c:
@@ -1465,24 +1503,36 @@ def run_trading(send_alerts=True):
         engine.update(status="idle", started_at=None, current=None, message="بانتظار الفحص التالي")
 
 
+evolve_lock = threading.Lock()
+
+
 def run_evolution_job(send_alerts=True):
-    with work_lock:
-        engine.update(status="analyzing", message="جارٍ البحث التطوري عن استراتيجيات أفضل...")
+    """التطوير في قفل منفصل: لا يوقف الفحص الدوري ولا الفحص اليدوي."""
+    if not evolve_lock.acquire(blocking=False):
+        return False
+    try:
+        engine["evolving"] = True
+        log_event("evolve", "بدأ البحث التطوري عن استراتيجيات أفضل")
         for asset in store.get_assets():
             try:
                 res = evolve_asset(asset, store, CONFIG["evolve_generations"], CONFIG["evolve_population"], send_alerts)
                 log_event("evolve", "اعتُمدت استراتيجية جديدة" if res.get("changed") else "لم تتغير الاستراتيجية المعتمدة", asset)
-                engine.update(status="idle", message="بانتظار الفحص التالي")
             except Exception:
                 traceback.print_exc()
+                log_event("error", "فشل التطوير لهذا الأصل", asset)
         meta["last_evolve"] = time.time()
+        store.meta_set("last_evolve", meta["last_evolve"])
+        return True
+    finally:
+        engine["evolving"] = False
+        evolve_lock.release()
 
 
 def _scheduler():
     while True:
         run_trading()
-        if time.time() - meta["last_evolve"] >= CONFIG["evolve_every_hours"] * 3600:
-            run_evolution_job()
+        if time.time() - meta["last_evolve"] >= CONFIG["evolve_every_hours"] * 3600 and not evolve_lock.locked():
+            threading.Thread(target=run_evolution_job, daemon=True).start()
         engine["next_run"] = int(time.time() + CONFIG["check_every_minutes"] * 60)
         time.sleep(CONFIG["check_every_minutes"] * 60)
 
@@ -1508,6 +1558,10 @@ def ta_autoconnect():
         print(f"[tickerall] auto-connect error: {type(exc).__name__}", flush=True)
 
 
+_restored = restore_champions(store)
+if _restored:
+    print(f"[champions] استُعيدت استراتيجيات من الملفات: {', '.join(_restored)}", flush=True)
+meta["last_evolve"] = float(store.meta_get("last_evolve") or 0.0)
 if os.getenv("DISABLE_SCHEDULER") != "1":
     threading.Thread(target=ta_autoconnect, daemon=True).start()
     threading.Thread(target=_scheduler, daemon=True).start()
@@ -1847,8 +1901,10 @@ def run_now():
 def evolve_now():
     if not _authorized():
         return _deny()
+    if evolve_lock.locked():
+        return jsonify({"ok": True, "note": "التطوير يعمل حالياً، النتائج ستظهر عند انتهائه"})
     threading.Thread(target=run_evolution_job, daemon=True).start()
-    return jsonify({"ok": True, "note": "بدأ التطوير، قد يستغرق عدة دقائق"})
+    return jsonify({"ok": True, "note": "بدأ التطوير، قد يستغرق عدة دقائق دون إيقاف الفحص"})
 
 
 INDEX_HTML = r'''
