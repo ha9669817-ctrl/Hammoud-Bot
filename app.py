@@ -265,13 +265,14 @@ def _ema(s: pd.Series, n: int) -> pd.Series:
 # التاريخي وبوابات التحقق، ولا يُعتمد منها إلا ما ينجح فعلاً.
 # =====================================================================
 RULES = ["sweep", "rsi", "macd", "bollinger", "ema_9_21", "ema_50_200", "supertrend",
-         "psar", "ao", "heikin", "dual_thrust", "vwap", "london", "bbma"]
+         "psar", "ao", "heikin", "dual_thrust", "vwap", "london", "bbma", "bb_reentry"]
 RULE_AR = {
     "sweep": "قمة/قاع الأمس + سحب", "rsi": "RSI ارتداد", "macd": "تقاطع MACD",
     "bollinger": "اختراق بولينجر", "ema_9_21": "EMA 9/21", "ema_50_200": "EMA 50/200",
     "supertrend": "Supertrend", "psar": "Parabolic SAR", "ao": "Awesome Oscillator",
     "heikin": "Heikin-Ashi", "dual_thrust": "Dual Thrust", "vwap": "VWAP ارتداد",
     "london": "اختراق نطاق آسيا/لندن", "bbma": "بولنجر + تقاطع MA5/MA10 (BBMA)",
+    "bb_reentry": "إعادة دخول بولنجر",
 }
 
 
@@ -388,11 +389,28 @@ def _bbma_masks(df: pd.DataFrame):
     return long_m, short_m
 
 
+def _bb_reentry_masks(df: pd.DataFrame):
+    """منقول من Basic_Bollinger_Bands (MIT، Terence Beaujour) buyflag/sellflag:
+    شراء: الشمعة السابقة أغلقت تحت الحد السفلي، والشمعة الحالية فتحت تحته وأغلقت فوقه.
+    بيع: العكس عند الحد العلوي. بولنجر 20 وانحراف 2، بانحراف سكاني كما في iBands."""
+    o, c = df["open"], df["close"]
+    mid = c.rolling(20).mean()
+    sd = c.rolling(20).std(ddof=0)
+    lo, up = mid - 2 * sd, mid + 2 * sd
+    buy = ((o.shift(1) > lo.shift(1)) & (c.shift(1) <= lo.shift(1))
+           & (o <= lo) & (c > lo)).fillna(False).to_numpy()
+    sell = ((c.shift(1) > up.shift(1)) & (o.shift(1) <= up.shift(1))
+            & (o >= up) & (c < up)).fillna(False).to_numpy()
+    return buy, sell
+
+
 def _rule_masks(rule: str, df: pd.DataFrame):
     close = df["close"]
     n = len(df)
     if rule == "bbma":
         return _bbma_masks(df)
+    if rule == "bb_reentry":
+        return _bb_reentry_masks(df)
     if rule == "rsi":
         r = _rsi(close, 14)
         up, _ = _cross_up_down(r, 30.0)

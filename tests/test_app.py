@@ -355,6 +355,23 @@ def test_bbma_rule_is_registered_and_runs():
     assert isinstance(sigs, list) and all(x["risk"] > 0 for x in sigs)
 
 
+def test_bb_reentry_rule_is_registered_and_runs():
+    import numpy as np
+    import pandas as pd
+    assert "bb_reentry" in A.RULES and "bb_reentry" in A.RULE_AR
+    rng = np.random.default_rng(11)
+    n = 4000
+    close = 2000 + np.cumsum(rng.normal(0, 6, n))
+    t = pd.date_range("2026-01-01", periods=n, freq="h", tz="UTC")
+    df = pd.DataFrame({"open_time": t, "open": np.r_[close[0], close[:-1]], "high": close + 4,
+                       "low": close - 4, "close": close, "volume": 1.0})
+    df["close_time"] = df["open_time"] + pd.Timedelta(hours=1) - pd.Timedelta(milliseconds=1)
+    buy, sell = A._bb_reentry_masks(df)
+    assert len(buy) == n and len(sell) == n
+    sigs = A.rule_signals("bb_reentry", df, 1.5, 2.0)
+    assert isinstance(sigs, list) and all(x["risk"] > 0 for x in sigs)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:
