@@ -265,13 +265,13 @@ def _ema(s: pd.Series, n: int) -> pd.Series:
 # التاريخي وبوابات التحقق، ولا يُعتمد منها إلا ما ينجح فعلاً.
 # =====================================================================
 RULES = ["sweep", "rsi", "macd", "bollinger", "ema_9_21", "ema_50_200", "supertrend",
-         "psar", "ao", "heikin", "dual_thrust", "vwap", "london"]
+         "psar", "ao", "heikin", "dual_thrust", "vwap", "london", "bbma"]
 RULE_AR = {
     "sweep": "قمة/قاع الأمس + سحب", "rsi": "RSI ارتداد", "macd": "تقاطع MACD",
     "bollinger": "اختراق بولينجر", "ema_9_21": "EMA 9/21", "ema_50_200": "EMA 50/200",
     "supertrend": "Supertrend", "psar": "Parabolic SAR", "ao": "Awesome Oscillator",
     "heikin": "Heikin-Ashi", "dual_thrust": "Dual Thrust", "vwap": "VWAP ارتداد",
-    "london": "اختراق نطاق آسيا/لندن",
+    "london": "اختراق نطاق آسيا/لندن", "bbma": "بولنجر + تقاطع MA5/MA10 (BBMA)",
 }
 
 
@@ -369,9 +369,30 @@ def _london_signals(df: pd.DataFrame):
     return long_m, short_m
 
 
+def _bbma_masks(df: pd.DataFrame):
+    """منقول من BBMA (MIT، Ammar Ibrahim) mt5ea.mq5، CheckEntrySignals:
+    شراء: إغلاق تحت البولنجر السفلي + MA5(low) يتقاطع فوق MA10(low) + إغلاق فوق EMA50.
+    بيع: إغلاق فوق البولنجر العلوي + MA5(high) يتقاطع تحت MA10(high) + إغلاق تحت EMA50.
+    MA بسيط، وBollinger بانحراف سكاني (ddof=0) كما في iBands."""
+    close, high, low = df["close"], df["high"], df["low"]
+    mid = close.rolling(20).mean()
+    sd = close.rolling(20).std(ddof=0)
+    lower, upper = mid - 2 * sd, mid + 2 * sd
+    ma5h, ma10h = high.rolling(5).mean(), high.rolling(10).mean()
+    ma5l, ma10l = low.rolling(5).mean(), low.rolling(10).mean()
+    ema50 = close.ewm(span=50, adjust=False).mean()
+    up_low_cross = (ma5l.shift(1) <= ma10l.shift(1)) & (ma5l > ma10l)
+    dn_high_cross = (ma5h.shift(1) >= ma10h.shift(1)) & (ma5h < ma10h)
+    long_m = ((close < lower) & up_low_cross & (close > ema50)).fillna(False).to_numpy()
+    short_m = ((close > upper) & dn_high_cross & (close < ema50)).fillna(False).to_numpy()
+    return long_m, short_m
+
+
 def _rule_masks(rule: str, df: pd.DataFrame):
     close = df["close"]
     n = len(df)
+    if rule == "bbma":
+        return _bbma_masks(df)
     if rule == "rsi":
         r = _rsi(close, 14)
         up, _ = _cross_up_down(r, 30.0)
