@@ -285,6 +285,61 @@ def test_gold_fallback_is_marked_as_proxy_and_closed():
         A.MARKET_CACHE.update(original[3])
 
 
+def test_cycle_hard_deadline_releases_scan():
+    gate = threading.Event()
+    original_cycle, original_timeout = A.trading_cycle, A.CYCLE_TIMEOUT_S
+    events = []
+    original_log = A.log_event
+    A.log_event = lambda kind, text, asset=None: events.append(text)
+    A.trading_cycle = lambda asset, store, send_alerts=True: (gate.wait(10), _fake_cycle_result())[1]
+    A.CYCLE_TIMEOUT_S = 0.5
+    A.RUN.update(master=True, assets={"XAUUSD": True})
+    try:
+        start = time.time()
+        A.run_trading(send_alerts=False)
+        assert time.time() - start < 5, "scan must not wait for a hung asset"
+        assert A.engine["status"] == "idle"
+        assert any("تجاوز الفحص المهلة" in e for e in events), events
+    finally:
+        gate.set()
+        A.trading_cycle, A.CYCLE_TIMEOUT_S = original_cycle, original_timeout
+        A.log_event = original_log
+        A.RUN.update(master=False, assets={})
+
+
+def test_scheduler_tick_survives_a_crash():
+    original = A.run_trading
+    A.run_trading = lambda send_alerts=True: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        A._scheduler_tick()
+        assert A.engine["status"] == "idle"
+    finally:
+        A.run_trading = original
+
+
+def test_evolution_respects_time_budget():
+    original = A.EVOLVE_BUDGET_S
+    A.EVOLVE_BUDGET_S = -1
+    try:
+        out = A.run_evolution("BTCUSDT", None, None, A.store, 3, 8, seed=1)
+        assert out["evaluated"] == 0
+    finally:
+        A.EVOLVE_BUDGET_S = original
+        A.store.set_champion("BTCUSDT", None)
+
+
+def test_watchdog_flags_a_stuck_scan():
+    original = dict(A.engine)
+    try:
+        A.engine.update(status="analyzing", started_at=int(time.time()) - A.STUCK_S - 5)
+        assert A._watchdog_check() is True
+        A.engine.update(status="idle", started_at=None)
+        assert A._watchdog_check() is False
+    finally:
+        A.engine.clear()
+        A.engine.update(original)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:

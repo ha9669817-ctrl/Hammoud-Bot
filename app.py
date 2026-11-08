@@ -6,7 +6,9 @@ import json
 import math
 import os
 import random
+import faulthandler
 import resource
+import sys
 import sqlite3
 import threading
 import time
@@ -110,6 +112,9 @@ def restore_champions(store_obj):
 
 BINANCE_URL = "https://data-api.binance.vision/api/v3/klines"
 TIMEOUT = 20
+CYCLE_TIMEOUT_S = 240      # أقصى مدة لفحص أصل واحد، حتى لا يعلق المحرك
+EVOLVE_BUDGET_S = 1800     # أقصى مدة لجولة تطوير واحدة
+STUCK_S = 900              # بعد هذه المدة من الفحص المتصل يُسجَّل تشخيص التعطل
 
 # =====================================================================
 # تنبيهات تليجرام (لا تُسقط الدورة عند الفشل)
@@ -612,8 +617,11 @@ def run_evolution(asset, h1, daily, store, generations, population, seed=None) -
     champ = store.get_champion(asset)
     parents = [champ["genome"]] if champ else []
     seen, accepted, evaluated = set(), [], 0
+    deadline = time.time() + EVOLVE_BUDGET_S
 
     for gen in range(generations):
+        if time.time() > deadline:
+            break
         candidates = []
         if gen == 0:
             if champ:
@@ -625,6 +633,8 @@ def run_evolution(asset, h1, daily, store, generations, population, seed=None) -
             else:
                 candidates.append(random_genome(rng))
         for g in candidates:
+            if time.time() > deadline:
+                break
             k = key(g)
             if k in seen:
                 continue
@@ -1508,7 +1518,22 @@ def run_trading(send_alerts=True):
                 continue
             engine.update(current=label, message=f"تحميل بيانات {label} وتحليلها...")
             try:
-                res = trading_cycle(asset, store, send_alerts=send_alerts)
+                box = {}
+
+                def _run_cycle(asset=asset, box=box):
+                    try:
+                        box["res"] = trading_cycle(asset, store, send_alerts=send_alerts)
+                    except Exception as exc:
+                        box["err"] = exc
+
+                worker = threading.Thread(target=_run_cycle, daemon=True)
+                worker.start()
+                worker.join(CYCLE_TIMEOUT_S)
+                if worker.is_alive():
+                    raise TimeoutError(f"تجاوز الفحص المهلة ({CYCLE_TIMEOUT_S} ث)")
+                if "err" in box:
+                    raise box["err"]
+                res = box["res"]
                 live[asset] = {"price": res["price"], "latest": res["latest"],
                                "has_champion": res["has_champion"], "errors": res["errors"],
                                "note": res["note"], "updated": int(time.time()),
@@ -1650,17 +1675,56 @@ def maybe_daily_summary():
          f"صفقات مفتوحة: {len(store.open_trades())}\n{DISCLAIMER}")
 
 
-def _scheduler():
-    while True:
+def _scheduler_tick():
+    try:
         run_trading()
-        try:
-            maybe_daily_summary()
-        except Exception as exc:
-            print(f"[summary] {exc}", flush=True)
+    except Exception:
+        traceback.print_exc()
+        engine.update(status="idle", current=None, started_at=None,
+                      message="خطأ في الفحص، سيُعاد المحاولة في الدورة التالية")
+    try:
+        maybe_daily_summary()
+    except Exception as exc:
+        print(f"[summary] {exc}", flush=True)
+    try:
         if time.time() - meta["last_evolve"] >= CONFIG["evolve_every_hours"] * 3600 and not evolve_lock.locked():
             threading.Thread(target=run_evolution_job, daemon=True).start()
-        engine["next_run"] = int(time.time() + CONFIG["check_every_minutes"] * 60)
+    except Exception:
+        traceback.print_exc()
+    engine["next_run"] = int(time.time() + CONFIG["check_every_minutes"] * 60)
+
+
+def _scheduler():
+    while True:
+        _scheduler_tick()
         time.sleep(CONFIG["check_every_minutes"] * 60)
+
+
+_stuck_reported = {"at": None}
+
+
+def _watchdog_check(now=None):
+    """إذا بقي الفحص متصلاً أكثر من STUCK_S يُسجَّل تشخيص كامل لكل الخيوط في سجل Render."""
+    now = now or time.time()
+    started = engine.get("started_at")
+    if engine.get("status") != "analyzing" or not started or now - started < STUCK_S:
+        return False
+    if _stuck_reported["at"] == started:
+        return True
+    _stuck_reported["at"] = started
+    log_event("error", "المحرك عالق منذ أكثر من 15 دقيقة، تم تسجيل تفاصيل التعطل في السجل")
+    faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+    alert_once("stuck", "⚠️ المحرك عالق منذ أكثر من 15 دقيقة. راجع سجل Render لتفاصيل التعطل.")
+    return True
+
+
+def _watchdog():
+    while True:
+        time.sleep(60)
+        try:
+            _watchdog_check()
+        except Exception:
+            traceback.print_exc()
 
 
 def ta_autoconnect():
@@ -1698,6 +1762,7 @@ if os.getenv("DISABLE_SCHEDULER") != "1":
     threading.Thread(target=ta_autoconnect, daemon=True).start()
     threading.Thread(target=_scheduler, daemon=True).start()
     threading.Thread(target=_keepalive_loop, daemon=True).start()
+    threading.Thread(target=_watchdog, daemon=True).start()
 
 
 def _authorized() -> bool:
