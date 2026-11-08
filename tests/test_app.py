@@ -372,6 +372,27 @@ def test_bb_reentry_rule_is_registered_and_runs():
     assert isinstance(sigs, list) and all(x["risk"] > 0 for x in sigs)
 
 
+def test_trend_rules_registered_and_run():
+    import numpy as np
+    import pandas as pd
+    new = ["donchian", "ema_pullback", "adx_di"]
+    for r in new:
+        assert r in A.RULES and r in A.RULE_AR
+    rng = np.random.default_rng(21)
+    n = 4000
+    close = 2000 + np.cumsum(rng.normal(0, 6, n))
+    t = pd.date_range("2026-01-01", periods=n, freq="h", tz="UTC")
+    df = pd.DataFrame({"open_time": t, "open": np.r_[close[0], close[:-1]], "high": close + 4,
+                       "low": close - 4, "close": close, "volume": 1.0})
+    df["close_time"] = df["open_time"] + pd.Timedelta(hours=1) - pd.Timedelta(milliseconds=1)
+    for r in new:
+        up, dn = A._rule_masks(r, df)
+        assert len(up) == n and len(dn) == n
+        assert not np.any(np.asarray(up) & np.asarray(dn))
+        sigs = A.rule_signals(r, df, 1.5, 2.0)
+        assert isinstance(sigs, list) and all(x["risk"] > 0 for x in sigs)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:

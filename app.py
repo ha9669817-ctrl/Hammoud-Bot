@@ -265,8 +265,11 @@ def _ema(s: pd.Series, n: int) -> pd.Series:
 # التاريخي وبوابات التحقق، ولا يُعتمد منها إلا ما ينجح فعلاً.
 # =====================================================================
 RULES = ["sweep", "rsi", "macd", "bollinger", "ema_9_21", "ema_50_200", "supertrend",
-         "psar", "ao", "heikin", "dual_thrust", "vwap", "london", "bbma", "bb_reentry"]
+         "psar", "ao", "heikin", "dual_thrust", "vwap", "london", "bbma", "bb_reentry",
+         "donchian", "ema_pullback", "adx_di"]
 RULE_AR = {
+    "donchian": "اختراق قناة دونشيان 20", "ema_pullback": "ارتداد مع الاتجاه (EMA 21/200)",
+    "adx_di": "تقاطع +DI/-DI مع ADX",
     "sweep": "قمة/قاع الأمس + سحب", "rsi": "RSI ارتداد", "macd": "تقاطع MACD",
     "bollinger": "اختراق بولينجر", "ema_9_21": "EMA 9/21", "ema_50_200": "EMA 50/200",
     "supertrend": "Supertrend", "psar": "Parabolic SAR", "ao": "Awesome Oscillator",
@@ -404,6 +407,44 @@ def _bb_reentry_masks(df: pd.DataFrame):
     return buy, sell
 
 
+def _donchian_masks(df: pd.DataFrame, n: int = 20):
+    """اختراق قناة دونشيان: إغلاق يتجاوز أعلى قمة لآخر n شمعة (أو أدنى قاع) لأول مرة.
+    مفهوم عام معروف (نظام Turtle)، مكتوب هنا من الصفر."""
+    close = df["close"]
+    up_lvl = df["high"].rolling(n).max().shift(1)
+    dn_lvl = df["low"].rolling(n).min().shift(1)
+    up = ((close > up_lvl) & (close.shift(1) <= up_lvl.shift(1))).fillna(False).to_numpy()
+    dn = ((close < dn_lvl) & (close.shift(1) >= dn_lvl.shift(1))).fillna(False).to_numpy()
+    return up, dn
+
+
+def _ema_pullback_masks(df: pd.DataFrame):
+    """اتجاه بمتوسط 200، ودخول مع عودة السعر فوق EMA21 بعد أن كان تحتها (ارتداد مع الاتجاه).
+    شراء: الإغلاق فوق EMA200 وعبر EMA21 صعوداً. بيع: العكس."""
+    close = df["close"]
+    e21, e200 = _ema(close, 21), _ema(close, 200)
+    up = ((close > e21) & (close.shift(1) <= e21.shift(1)) & (close > e200)).fillna(False).to_numpy()
+    dn = ((close < e21) & (close.shift(1) >= e21.shift(1)) & (close < e200)).fillna(False).to_numpy()
+    return up, dn
+
+
+def _adx_di_masks(df: pd.DataFrame, n: int = 14, min_adx: float = 20.0):
+    """تقاطع +DI و-DI (معادلات Wilder) عندما يكون ADX يدل على وجود اتجاه فعلي."""
+    h, l, c = df["high"], df["low"], df["close"]
+    up_move, dn_move = h.diff(), -l.diff()
+    plus_dm = up_move.where((up_move > dn_move) & (up_move > 0), 0.0)
+    minus_dm = dn_move.where((dn_move > up_move) & (dn_move > 0), 0.0)
+    tr = pd.concat([h - l, (h - c.shift(1)).abs(), (l - c.shift(1)).abs()], axis=1).max(axis=1)
+    atr_w = tr.ewm(alpha=1 / n, adjust=False).mean().replace(0, np.nan)
+    pdi = 100 * plus_dm.ewm(alpha=1 / n, adjust=False).mean() / atr_w
+    mdi = 100 * minus_dm.ewm(alpha=1 / n, adjust=False).mean() / atr_w
+    dx = 100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, np.nan)
+    adx = dx.ewm(alpha=1 / n, adjust=False).mean()
+    cross_up, cross_dn = _cross_up_down(pdi, mdi)
+    strong = (adx > min_adx).fillna(False).to_numpy()
+    return cross_up & strong, cross_dn & strong
+
+
 def _rule_masks(rule: str, df: pd.DataFrame):
     close = df["close"]
     n = len(df)
@@ -411,6 +452,12 @@ def _rule_masks(rule: str, df: pd.DataFrame):
         return _bbma_masks(df)
     if rule == "bb_reentry":
         return _bb_reentry_masks(df)
+    if rule == "donchian":
+        return _donchian_masks(df)
+    if rule == "ema_pullback":
+        return _ema_pullback_masks(df)
+    if rule == "adx_di":
+        return _adx_di_masks(df)
     if rule == "rsi":
         r = _rsi(close, 14)
         up, _ = _cross_up_down(r, 30.0)
