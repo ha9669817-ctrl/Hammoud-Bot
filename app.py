@@ -149,14 +149,23 @@ def _to_df(rows: list) -> pd.DataFrame:
     return df[KEEP].drop_duplicates("open_time").sort_values("open_time").reset_index(drop=True)
 
 
+BINANCE_COOLDOWN_S = 1800
+_binance_block = {"until": 0.0}
+
+
 def fetch_history(symbol: str, interval: str, total: int) -> pd.DataFrame:
     chunks, end, remaining = [], None, total
     while remaining > 0:
+        if time.time() < _binance_block["until"]:
+            raise RuntimeError("Binance محظور مؤقتاً بعد رفض سابق (418/429)، يُتخطى حتى انتهاء المهلة")
         limit = min(1000, remaining)
         params = {"symbol": symbol, "interval": interval, "limit": limit}
         if end is not None:
             params["endTime"] = end
         r = requests.get(BINANCE_URL, params=params, timeout=TIMEOUT)
+        if r.status_code in (418, 429):
+            _binance_block["until"] = time.time() + BINANCE_COOLDOWN_S
+            raise RuntimeError(f"Binance رفض الطلب ({r.status_code})، إيقاف مؤقت 30 دقيقة")
         r.raise_for_status()
         rows = r.json()
         if not rows:
@@ -1571,7 +1580,15 @@ def evolve_asset(asset: str, store: Store, generations: int, population: int, se
 # =====================================================================
 app = Flask(__name__, static_folder=str(Path(__file__).resolve().parent / "web" / "static"), static_url_path="/static")
 store = Store(DB_PATH, CONFIG["start_balance"])
-work_lock = threading.Lock()
+SCAN_DEADLINE_S = 900
+scan_state = {"gen": 0, "started": None}
+scan_mutex = threading.Lock()
+
+
+def scan_busy() -> bool:
+    with scan_mutex:
+        s = scan_state["started"]
+        return bool(s and time.time() - s < SCAN_DEADLINE_S)
 RUN = {"master": False, "assets": {}}  # يبدأ متوقفاً بعد كل نشر أو إعادة تشغيل
 live: dict = {}
 meta = {"last_evolve": 0.0, "last_test": None}
@@ -1624,8 +1641,8 @@ def apply_autostart() -> bool:
     return True
 
 
-def run_trading(send_alerts=True):
-    with work_lock:
+def _scan_body(gen, send_alerts=True):
+    try:
         engine.update(status="analyzing", started_at=int(time.time()), current=None,
                       message="بدأ الفحص الآن")
         log_event("scan", "بدء فحص الأصول")
@@ -1696,6 +1713,35 @@ def run_trading(send_alerts=True):
         engine["last_run"] = int(time.time())
         engine.update(status="idle", started_at=None, current=None, message="بانتظار الفحص التالي")
 
+    finally:
+        with scan_mutex:
+            if scan_state["gen"] == gen:
+                scan_state["started"] = None
+
+
+def run_trading(send_alerts=True):
+    """يشغّل الفحص في خيط مستقل بمهلة كاملة. إذا تعطّل فحص يتجاوز المهلة يُترك جانباً
+    ويبدأ فحص جديد، فلا يبقى المحرك معلقاً إلى الأبد."""
+    now = time.time()
+    with scan_mutex:
+        s = scan_state["started"]
+        if s and now - s < SCAN_DEADLINE_S:
+            return False
+        if s:
+            log_event("error", "فحص سابق تجاوز المهلة، تم تجاوزه وبدأ فحص جديد")
+        scan_state["gen"] += 1
+        my_gen = scan_state["gen"]
+        scan_state["started"] = now
+    t = threading.Thread(target=_scan_body, args=(my_gen, send_alerts), daemon=True)
+    t.start()
+    t.join(SCAN_DEADLINE_S)
+    if t.is_alive():
+        with scan_mutex:
+            if scan_state["gen"] == my_gen:
+                scan_state["started"] = None
+        engine.update(status="idle", started_at=None, current=None, message="تجاوز الفحص المهلة، سيُعاد لاحقاً")
+        alert_once("scan_timeout", "⚠️ تجاوز الفحص المهلة المحددة وتم تجاوزه تلقائياً. راجع سجل Render.")
+    return True
 
 evolve_lock = threading.Lock()
 
@@ -1989,7 +2035,7 @@ def _build_state() -> dict:
         "equity": equity,
         "evolutions": store.recent_evolutions(12),
         "engine": {**engine, "mode": store.get_mode(), "scan_minutes": CONFIG["check_every_minutes"],
-                   "busy": work_lock.locked(), "now": int(time.time()), "peak_mb": _rss_mb()},
+                   "busy": scan_busy(), "now": int(time.time()), "peak_mb": _rss_mb()},
         "activity": list(activity)[:40],
         "trading": {"master": RUN["master"],
                     "assets": {a: bool(RUN["assets"].get(a)) for a in store.get_assets()},
@@ -2221,7 +2267,7 @@ def broker_test():
 def run_now():
     if not _authorized():
         return _deny()
-    busy = work_lock.locked()
+    busy = scan_busy()
     threading.Thread(target=run_trading, daemon=True).start()
     if busy:
         note = "المحرك مشغول بعملية أخرى، وسيبدأ الفحص فور انتهائها"

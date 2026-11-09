@@ -105,7 +105,7 @@ def test_evolution_does_not_block_trading():
         t = threading.Thread(target=A.run_evolution_job, daemon=True)
         t.start()
         time.sleep(0.2)
-        assert A.evolve_lock.locked() and not A.work_lock.locked()
+        assert A.evolve_lock.locked() and not A.scan_busy()
         assert A.run_evolution_job() is False
         gate.set()
         t.join(5)
@@ -437,6 +437,40 @@ def test_autostart_is_opt_in():
         os.environ.pop("AUTOSTART_ASSETS", None)
         A.RUN["master"] = saved_master
         A.RUN["assets"] = saved_assets
+
+
+def test_stuck_scan_does_not_block_next_scan():
+    import time as _t
+    saved = (A.SCAN_DEADLINE_S, A.trading_cycle, A.RUN["master"], dict(A.RUN["assets"]))
+    snap_saved = A.store.meta_get("ta_snapshot")
+    try:
+        A.SCAN_DEADLINE_S = 1
+        A.trading_cycle = lambda asset, store, send_alerts=True: _t.sleep(4) or {}
+        A.RUN["master"] = True
+        A.RUN["assets"]["BTCUSDT"] = True
+        A.store.meta_set("ta_snapshot", {"balance": 500.0, "equity": 500.0})
+        t0 = _t.time()
+        A.run_trading(send_alerts=False)
+        assert _t.time() - t0 < 3, "the scan must return at its deadline, not hang"
+        assert A.scan_busy() is False, "an abandoned scan must not keep the engine busy"
+        assert A.run_trading(send_alerts=False) is True, "the next scan must start"
+    finally:
+        A.SCAN_DEADLINE_S, A.trading_cycle = saved[0], saved[1]
+        A.RUN["master"], A.RUN["assets"] = saved[2], saved[3]
+        A.store.meta_set("ta_snapshot", snap_saved)
+
+
+def test_binance_cooldown_after_418():
+    saved = A._binance_block["until"]
+    try:
+        A._binance_block["until"] = A.time.time() + 100
+        try:
+            A.fetch_history("BTCUSDT", "1h", 10)
+            raise AssertionError("expected cooldown error")
+        except RuntimeError as exc:
+            assert "محظور مؤقتاً" in str(exc)
+    finally:
+        A._binance_block["until"] = saved
 
 
 if __name__ == "__main__":
