@@ -393,6 +393,52 @@ def test_trend_rules_registered_and_run():
         assert isinstance(sigs, list) and all(x["risk"] > 0 for x in sigs)
 
 
+def test_gold_blocked_below_threshold():
+    assert A.asset_blocked_reason("XAUUSD", 20.0) is not None
+    assert A.asset_blocked_reason("XAUUSD", 499.99) is not None
+    assert A.asset_blocked_reason("XAUUSD", 500.0) is None
+    assert A.asset_blocked_reason("BTCUSDT", 20.0) is None
+
+
+def test_zero_balance_stops_master_and_alerts():
+    import os
+    saved_snap = A.store.meta_get("ta_snapshot")
+    saved_master = A.RUN["master"]
+    sent = []
+    old_send = A.send
+    try:
+        A.send = lambda text: sent.append(text)
+        A._alert_last.pop("zero_balance", None)
+        A.RUN["master"] = True
+        A.store.meta_set("ta_snapshot", {"balance": 0.0, "equity": 0.0})
+        A.run_trading(send_alerts=False)
+        assert A.RUN["master"] is False
+        assert any("تصفير" in t for t in sent)
+    finally:
+        A.send = old_send
+        A.RUN["master"] = saved_master
+        A.store.meta_set("ta_snapshot", saved_snap)
+
+
+def test_autostart_is_opt_in():
+    import os
+    saved_master = A.RUN["master"]
+    saved_assets = dict(A.RUN["assets"])
+    try:
+        os.environ.pop("AUTOSTART", None)
+        A.RUN["master"] = False
+        assert A.apply_autostart() is False and A.RUN["master"] is False
+        os.environ["AUTOSTART"] = "1"
+        os.environ["AUTOSTART_ASSETS"] = "BTCUSDT"
+        assert A.apply_autostart() is True
+        assert A.RUN["master"] is True and A.RUN["assets"].get("BTCUSDT") is True
+    finally:
+        os.environ.pop("AUTOSTART", None)
+        os.environ.pop("AUTOSTART_ASSETS", None)
+        A.RUN["master"] = saved_master
+        A.RUN["assets"] = saved_assets
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:

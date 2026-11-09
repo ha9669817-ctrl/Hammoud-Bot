@@ -1592,15 +1592,58 @@ def _fmt(v):
         return "—"
 
 
+GOLD_MIN_BALANCE = float(os.getenv("GOLD_MIN_BALANCE", "500"))
+ZERO_BALANCE_EPS = 1.0
+
+
+def current_balance() -> float:
+    """الرصيد من الوسيط إن توفر، وإلا الرصيد المحلي."""
+    snap = store.meta_get("ta_snapshot") or {}
+    if snap.get("balance") is not None:
+        return float(snap["balance"])
+    return store.balance()
+
+
+def asset_blocked_reason(asset: str, balance: float):
+    """قواعد حماية ثابتة: الذهب ممنوع تحت حد الرصيد المحدد."""
+    if asset == "XAUUSD" and balance < GOLD_MIN_BALANCE:
+        return (f"الذهب محظور حتى يبلغ الرصيد {GOLD_MIN_BALANCE:g}$ "
+                f"(الرصيد الحالي {balance:,.2f}$)")
+    return None
+
+
+def apply_autostart() -> bool:
+    """تشغيل تلقائي عند الإقلاع، مفعّل فقط إذا ضبطت AUTOSTART=1 في Render."""
+    if os.getenv("AUTOSTART", "0") != "1":
+        return False
+    RUN["master"] = True
+    for a in (os.getenv("AUTOSTART_ASSETS") or "BTCUSDT").split(","):
+        if a.strip():
+            RUN["assets"][a.strip()] = True
+    log_event("scan", "تشغيل تلقائي عند الإقلاع (AUTOSTART=1)")
+    return True
+
+
 def run_trading(send_alerts=True):
     with work_lock:
         engine.update(status="analyzing", started_at=int(time.time()), current=None,
                       message="بدأ الفحص الآن")
         log_event("scan", "بدء فحص الأصول")
+        balance = current_balance()
+        if balance <= ZERO_BALANCE_EPS:
+            RUN["master"] = False
+            log_event("error", f"الرصيد صفر ({balance:,.2f}$): أوقفت التداول تلقائياً")
+            alert_once("zero_balance", "تنبيه: تم تصفير الحساب، يرجى إعادة شحنه من البروكر", every=3600)
+            engine.update(status="idle", started_at=None, current=None, message="الرصيد صفر، التداول متوقف")
+            return
         for asset in store.get_assets():
             label = ASSETS[asset]["label"]
             if not (RUN["master"] and RUN["assets"].get(asset)):
                 log_info_once(asset, "متوقف: شغّل التداول لهذا الأصل من لوحة المحرك")
+                continue
+            blocked = asset_blocked_reason(asset, balance)
+            if blocked:
+                log_info_once(asset, blocked)
                 continue
             engine.update(current=label, message=f"تحميل بيانات {label} وتحليلها...")
             try:
@@ -1844,6 +1887,7 @@ _restored = restore_champions(store)
 if _restored:
     print(f"[champions] استُعيدت استراتيجيات من الملفات: {', '.join(_restored)}", flush=True)
 meta["last_evolve"] = float(store.meta_get("last_evolve") or 0.0)
+apply_autostart()
 if os.getenv("DISABLE_SCHEDULER") != "1":
     threading.Thread(target=ta_autoconnect, daemon=True).start()
     threading.Thread(target=_scheduler, daemon=True).start()
