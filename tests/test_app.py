@@ -485,7 +485,7 @@ def test_bot_start_stop_endpoints_and_list():
     try:
         state = c.get("/api/state").get_json()
         names = [b["id"] for b in state["bots"]]
-        assert "donchian" in names and "xau_breakout_pro" in names and len(names) == 15
+        assert "donchian" in names and "xau_breakout_pro" in names and "two_candle_reversal" in names and len(names) == 16
         r = c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "not_a_bot"}, headers=headers)
         assert r.status_code == 400
         r = c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "donchian"}, headers=headers)

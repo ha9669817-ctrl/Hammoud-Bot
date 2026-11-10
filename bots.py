@@ -185,6 +185,15 @@ def _wrap(fn):
     return run
 
 
+def two_candle_reversal(df):
+    """انعكاس الشمعتين: شمعة صاعدة بعد هابطة للشراء، والعكس للبيع.
+    مفهوم عام معروف في تحليل الشموع، وكُتب هنا من جديد."""
+    o, c = df["open"], df["close"]
+    bull = (c > o) & (c.shift(1) < o.shift(1))
+    bear = (c < o) & (c.shift(1) > o.shift(1))
+    return _np(bull), _np(bear)
+
+
 BOT_FUNCS = {
     "ema_macd_scalp": ema_macd_scalp,
     "bb_rsi_reversion": bb_rsi_reversion,
@@ -201,6 +210,7 @@ BOT_FUNCS = {
     "consecutive_candles": consecutive_candles,
     "close_momentum": close_momentum,
     "xau_breakout_pro": xau_breakout_pro,
+    "two_candle_reversal": two_candle_reversal,
 }
 BOT_FUNCS = {k: _wrap(v) for k, v in BOT_FUNCS.items()}
 
@@ -220,4 +230,5 @@ BOT_AR = {
     "consecutive_candles": "بوت الشموع المتتالية",
     "close_momentum": "بوت زخم الإغلاق",
     "xau_breakout_pro": "بوت اختراق الذهب الخاطف (5 شموع)",
+    "two_candle_reversal": "بوت انعكاس الشمعتين",
 }
