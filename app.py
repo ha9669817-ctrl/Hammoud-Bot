@@ -274,6 +274,7 @@ def _ema(s: pd.Series, n: int) -> pd.Series:
 # كل قاعدة تُنتج إشارات دخول بنفس صيغة sweep_run، فتمر عبر نفس الاختبار
 # التاريخي وبوابات التحقق، ولا يُعتمد منها إلا ما ينجح فعلاً.
 # =====================================================================
+from bots import BOT_FUNCS, BOT_AR  # كتالوج البوتات (bots.py)
 RULES = ["sweep", "rsi", "macd", "bollinger", "ema_9_21", "ema_50_200", "supertrend",
          "psar", "ao", "heikin", "dual_thrust", "vwap", "london", "bbma", "bb_reentry",
          "donchian", "ema_pullback", "adx_di"]
@@ -287,6 +288,9 @@ RULE_AR = {
     "london": "اختراق نطاق آسيا/لندن", "bbma": "بولنجر + تقاطع MA5/MA10 (BBMA)",
     "bb_reentry": "إعادة دخول بولنجر",
 }
+
+
+RULE_AR.update(BOT_AR)
 
 
 def _cross_up_down(a: pd.Series, b):
@@ -458,6 +462,8 @@ def _adx_di_masks(df: pd.DataFrame, n: int = 14, min_adx: float = 20.0):
 def _rule_masks(rule: str, df: pd.DataFrame):
     close = df["close"]
     n = len(df)
+    if rule in BOT_FUNCS:
+        return BOT_FUNCS[rule](df)
     if rule == "bbma":
         return _bbma_masks(df)
     if rule == "bb_reentry":
@@ -1862,11 +1868,6 @@ def _scheduler_tick():
         maybe_daily_summary()
     except Exception as exc:
         print(f"[summary] {exc}", flush=True)
-    try:
-        if time.time() - meta["last_evolve"] >= CONFIG["evolve_every_hours"] * 3600 and not evolve_lock.locked():
-            threading.Thread(target=run_evolution_job, daemon=True).start()
-    except Exception:
-        traceback.print_exc()
     engine["next_run"] = int(time.time() + CONFIG["check_every_minutes"] * 60)
 
 
@@ -2038,6 +2039,7 @@ def _build_state() -> dict:
         "engine": {**engine, "mode": store.get_mode(), "scan_minutes": CONFIG["check_every_minutes"],
                    "busy": scan_busy(), "now": int(time.time()), "peak_mb": _rss_mb()},
         "activity": list(activity)[:40],
+        "bots": [{"id": k, "name": v} for k, v in BOT_AR.items()],
         "trading": {"master": RUN["master"],
                     "assets": {a: bool(RUN["assets"].get(a)) for a in store.get_assets()},
                     "locked": {a: bool(store.meta_get(f"lock|{a}")) for a in store.get_assets()}},
@@ -2355,14 +2357,38 @@ def champions_export():
     return jsonify({a: store.get_champion(a) for a in store.get_assets() if store.get_champion(a)})
 
 
-@app.post("/api/evolve")
-def evolve_now():
+BOT_DEFAULTS = {"atr_stop": 1.5, "atr_len": 14, "depth_mult": 0.2, "sl_buffer": 0.2,
+                "target_r": 2.0, "tf": 1, "trend": False}
+
+
+@app.post("/api/bot/start")
+def bot_start():
     if not _authorized():
         return _deny()
-    if evolve_lock.locked():
-        return jsonify({"ok": True, "note": "التطوير يعمل حالياً، النتائج ستظهر عند انتهائه"})
-    threading.Thread(target=run_evolution_job, daemon=True).start()
-    return jsonify({"ok": True, "note": "بدأ التطوير، قد يستغرق عدة دقائق دون إيقاف الفحص"})
+    body = request.get_json(silent=True) or {}
+    asset, bot = body.get("asset"), body.get("bot")
+    if asset not in ASSETS or bot not in BOT_FUNCS:
+        return jsonify({"error": "أصل أو بوت غير صالح"}), 400
+    genome = {**BOT_DEFAULTS, "rule": bot}
+    store.set_champion(asset, {"genome": genome, "score": 0.0,
+                               "result": {"note": "تشغيل يدوي من قائمة البوتات"}, "since": utc_now()})
+    store.meta_set(f"lock|{asset}", True)
+    RUN["master"] = True
+    RUN["assets"][asset] = True
+    log_event("scan", f"بدء البوت: {BOT_AR[bot]}", asset)
+    return jsonify({"ok": True, "note": f"بدأ {BOT_AR[bot]} على {ASSETS[asset]['label']}"})
+
+
+@app.post("/api/bot/stop")
+def bot_stop():
+    if not _authorized():
+        return _deny()
+    asset = (request.get_json(silent=True) or {}).get("asset")
+    if asset not in ASSETS:
+        return jsonify({"error": "أصل غير صالح"}), 400
+    RUN["assets"][asset] = False
+    log_event("scan", "إيقاف البوت", asset)
+    return jsonify({"ok": True, "note": "تم إيقاف البوت على هذا الأصل"})
 
 
 INDEX_HTML = (Path(__file__).resolve().parent / "web" / "index.html").read_text(encoding="utf-8")

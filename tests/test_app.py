@@ -46,7 +46,8 @@ def test_routes_and_auth():
     assert c.get("/health").status_code == 200
     assert c.get("/api/state").status_code == 200
     assert c.get("/").status_code == 200
-    assert c.post("/api/evolve").status_code == 401
+    assert c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "donchian"}).status_code == 401
+    assert c.post("/api/evolve").status_code == 404
     assert c.get("/api/champions/export").status_code == 401
     assert c.get("/api/trades.csv").status_code == 401
 
@@ -471,6 +472,31 @@ def test_binance_cooldown_after_418():
             assert "محظور مؤقتاً" in str(exc)
     finally:
         A._binance_block["until"] = saved
+
+
+def test_bot_start_stop_endpoints_and_list():
+    import os
+    c = A.app.test_client()
+    os.environ.setdefault("ADMIN_PASSWORD", "t-pass")
+    pw = os.environ["ADMIN_PASSWORD"]
+    headers = {"X-Admin-Password": pw}
+    saved_master = A.RUN["master"]
+    saved_assets = dict(A.RUN["assets"])
+    try:
+        state = c.get("/api/state").get_json()
+        names = [b["id"] for b in state["bots"]]
+        assert "donchian" in names and "xau_breakout_pro" in names and len(names) == 15
+        r = c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "not_a_bot"}, headers=headers)
+        assert r.status_code == 400
+        r = c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "donchian"}, headers=headers)
+        assert r.status_code == 200, r.get_data(as_text=True)
+        assert A.RUN["master"] is True and A.RUN["assets"].get("BTCUSDT") is True
+        assert A.store.get_champion("BTCUSDT")["genome"]["rule"] == "donchian"
+        r = c.post("/api/bot/stop", json={"asset": "BTCUSDT"}, headers=headers)
+        assert r.status_code == 200 and A.RUN["assets"].get("BTCUSDT") is False
+    finally:
+        A.RUN["master"] = saved_master
+        A.RUN["assets"] = saved_assets
 
 
 if __name__ == "__main__":

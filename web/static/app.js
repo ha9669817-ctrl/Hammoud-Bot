@@ -163,6 +163,7 @@ function drawPrice() {
 function renderState(s) {
   renderEngine(s.engine, s.activity);
   renderTrading(s.trading, s.assets);
+  renderBots(s.bots || [], s.assets);
   renderStatusBar(s);
   renderAccount(s.account);
   renderChampion(s.assets, s.account);
@@ -287,6 +288,32 @@ function tickCountdown() {
 setInterval(tickCountdown, 1000);
 
 // ---------- research ----------
+let _botsKey = "";
+function renderBots(bots, assets) {
+  const key = JSON.stringify(bots);
+  if (key === _botsKey) return;
+  _botsKey = key;
+  const el = $("botList");
+  el.innerHTML = bots.map(b => `
+    <div class="bot-row" style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:10px;border:1px solid var(--line,#2a2f3a);border-radius:10px">
+      <span style="font-weight:600">${b.name}</span>
+      <span style="display:flex;gap:6px">
+        <button class="btn btn-primary" data-bot="${b.id}" data-asset="BTCUSDT">تشغيل · BTC</button>
+        <button class="btn" data-bot="${b.id}" data-asset="XAUUSD">تشغيل · الذهب</button>
+        <button class="btn" data-stop="BTCUSDT">إيقاف BTC</button>
+        <button class="btn" data-stop="XAUUSD">إيقاف الذهب</button>
+      </span>
+    </div>`).join("");
+  el.onclick = async (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    const res = b.dataset.stop
+      ? await postJson("/api/bot/stop", { asset: b.dataset.stop })
+      : await postJson("/api/bot/start", { asset: b.dataset.asset, bot: b.dataset.bot });
+    report(res);
+  };
+}
+
 function renderTrading(t, assets) {
   if (!t) return;
   $("btnMaster").textContent = t.master ? "إيقاف التداول" : "تشغيل التداول";
@@ -410,7 +437,7 @@ async function runScan(btn) {
 $("btnRun").onclick = () => runScan($("btnRun"));
 $("engBtnRun").onclick = () => runScan($("engBtnRun"));
 $("btnScope").onclick = async () => report(await postJson("/api/config", { assets: $("scope").value }));
-$("btnEvolve").onclick = async () => report(await postJson("/api/evolve"));
+
 $("btnExport").onclick = async () => {
   const pwd = $("pw").value.trim();
   if (!pwd) { $("pw").classList.add("bad"); $("pw").focus(); return msg("أدخل كلمة مرور الإدارة أولاً"); }
