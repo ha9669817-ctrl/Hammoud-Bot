@@ -55,7 +55,7 @@ function renderStatusBar(s) {
   en.textContent = evolving ? "المحرك: يطوّر" : e.status === "analyzing" ? "المحرك: يفحص" : "المحرك: جاهز";
   document.getElementById("sbMode").textContent = "الوضع: " + (MODE_AR[e.mode] || e.mode || "—");
   document.getElementById("sbLast").textContent = e.last_run ? "آخر فحص " + hm(e.last_run * 1000) : "";
-  document.getElementById("verFoot").textContent = "الإصدار: " + (s.version || "محلي");
+  document.getElementById("verFoot").textContent = "المالك والمطور: HAMAD · الإصدار: " + (s.version || "محلي");
 }
 
 async function loadState() {
