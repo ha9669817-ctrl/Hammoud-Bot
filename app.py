@@ -31,7 +31,7 @@ from flask import Flask, Response, jsonify, request
 # الإعدادات
 # =====================================================================
 CONFIG = {
-    "assets": ["XAUUSD", "BTCUSDT"],
+    "assets": ["XAUUSDm", "BTCUSDm"],
     "start_balance": 1000.0,
     "risk_pct": 1.0,
     "check_every_minutes": 15,
