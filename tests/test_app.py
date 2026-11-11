@@ -556,3 +556,20 @@ if __name__ == "__main__":
         fn()
         print("ok", fn.__name__)
     print(f"ALL {len(tests)} TESTS PASSED")
+
+
+def test_module_import_with_scheduler_enabled_has_no_name_errors():
+    """يستورد التطبيق كما يفعل Render (بدون DISABLE_SCHEDULER) ليكشف أخطاء ترتيب التعريف عند تشغيل الخيوط.
+    لو فشل الاستيراد بخطأ NameError يخرج العملية سريعاً؛ لو استمر التشغيل فالاستيراد نجح."""
+    import os
+    import subprocess
+    import sys
+    root = str(Path(__file__).resolve().parent.parent)
+    env = {k: v for k, v in os.environ.items() if k != "DISABLE_SCHEDULER"}
+    try:
+        proc = subprocess.run([sys.executable, "-c", "import app"], cwd=root, env=env,
+                              capture_output=True, text=True, timeout=15)
+        err = proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        err = (exc.stderr or b"").decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+    assert "NameError" not in err, err[-2000:]

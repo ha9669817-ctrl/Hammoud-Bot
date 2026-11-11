@@ -1983,6 +1983,15 @@ _restored = restore_champions(store)
 if _restored:
     print(f"[champions] استُعيدت استراتيجيات من الملفات: {', '.join(_restored)}", flush=True)
 meta["last_evolve"] = float(store.meta_get("last_evolve") or 0.0)
+def _market_loop():
+    """يحدّث أسعار السوق في الخلفية كل 8 ثوان، بعيداً عن طلبات الواجهة."""
+    while True:
+        try:
+            live_market(force=True)
+        except Exception as exc:
+            print(f"[market] refresh failed: {type(exc).__name__}", flush=True)
+        time.sleep(8)
+
 apply_autostart()
 if os.getenv("DISABLE_SCHEDULER") != "1":
     threading.Thread(target=ta_autoconnect, daemon=True).start()
@@ -2156,15 +2165,6 @@ def market():
                     "now": int(time.time()),
                     "age_sec": int(time.time() - MARKET_CACHE["at"]) if MARKET_CACHE["at"] else None})
 
-
-def _market_loop():
-    """يحدّث أسعار السوق في الخلفية كل 8 ثوان، بعيداً عن طلبات الواجهة."""
-    while True:
-        try:
-            live_market(force=True)
-        except Exception as exc:
-            print(f"[market] refresh failed: {type(exc).__name__}", flush=True)
-        time.sleep(8)
 
 
 @app.get("/api/state")
