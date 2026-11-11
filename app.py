@@ -1989,6 +1989,7 @@ if os.getenv("DISABLE_SCHEDULER") != "1":
     threading.Thread(target=_scheduler, daemon=True).start()
     threading.Thread(target=_keepalive_loop, daemon=True).start()
     threading.Thread(target=_watchdog, daemon=True).start()
+    threading.Thread(target=_market_loop, daemon=True).start()
 
 
 def _authorized() -> bool:
@@ -2148,8 +2149,22 @@ def live_market(force: bool = False) -> dict:
 
 @app.get("/api/market")
 def market():
-    return jsonify({"assets": live_market(force=request.args.get("force") == "1"),
-                    "source": "الوسيط TickerAll، وBinance عند الغياب (الذهب عبر PAXG)", "now": int(time.time())})
+    """يقرأ من الذاكرة فقط؛ الجلب من الشبكة يتم في خيط الخلفية، فلا يحجب الطلبات."""
+    data = MARKET_CACHE["data"] or {}
+    return jsonify({"assets": data,
+                    "source": "الوسيط TickerAll، وBinance عند الغياب (الذهب عبر PAXG)",
+                    "now": int(time.time()),
+                    "age_sec": int(time.time() - MARKET_CACHE["at"]) if MARKET_CACHE["at"] else None})
+
+
+def _market_loop():
+    """يحدّث أسعار السوق في الخلفية كل 8 ثوان، بعيداً عن طلبات الواجهة."""
+    while True:
+        try:
+            live_market(force=True)
+        except Exception as exc:
+            print(f"[market] refresh failed: {type(exc).__name__}", flush=True)
+        time.sleep(8)
 
 
 @app.get("/api/state")

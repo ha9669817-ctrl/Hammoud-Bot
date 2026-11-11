@@ -58,30 +58,47 @@ function renderStatusBar(s) {
   document.getElementById("verFoot").textContent = "المالك والمطور: HAMAD · الإصدار: " + (s.version || "محلي");
 }
 
+let stateFails = 0;
+async function fetchJson(url, ms = 6000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch(url, { cache: "no-store", signal: ctrl.signal });
+    if (!r.ok) throw new Error(r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function loadState() {
   try {
-    const r = await fetch("/api/state", { cache: "no-store" });
-    if (!r.ok) throw new Error(r.status);
-    state = await r.json();
+    state = await fetchJson("/api/state");
+    stateFails = 0;
     renderState(state);
     $("liveDot").className = "dot live";
-    $("liveText").textContent = "متصل · تحديث الحالة " + new Date().toLocaleTimeString("ar-SA");
+    const busy = state.engine && state.engine.status === "analyzing";
+    $("liveText").textContent = busy
+      ? "المحرك يفحص الأسواق الآن..."
+      : "متصل · تحديث الحالة " + new Date().toLocaleTimeString("ar-SA");
   } catch (e) {
-    $("liveDot").className = "dot down";
-    $("liveText").textContent = "انقطع الاتصال بالخادم، يُعاد المحاولة...";
+    stateFails += 1;
+    // لا نعرض خطأ أحمر إلا بعد 3 محاولات فاشلة متتالية، ونبقي آخر حالة معروضة
+    if (stateFails >= 3) {
+      $("liveDot").className = "dot down";
+      $("liveText").textContent = "انقطع الاتصال بالخادم، يُعاد المحاولة...";
+    } else {
+      $("liveText").textContent = "جارٍ التحديث...";
+    }
   }
 }
 
 async function loadMarket(force = false) {
   try {
-    const r = await fetch("/api/market" + (force ? "?force=1" : ""), { cache: "no-store" });
-    if (!r.ok) throw new Error(r.status);
-    market = await r.json();
+    market = await fetchJson("/api/market", 5000);
     renderPrices();
-    drawPrice();
-    $("chartMeta").textContent = "آخر تحديث " + hm(market.now * 1000) + " · المصدر: " + market.source;
   } catch (e) {
-    $("chartMeta").textContent = "تعذّر تحديث الأسعار حالياً";
+    // نبقي آخر أسعار معروضة بدل إظهار خطأ
   }
 }
 

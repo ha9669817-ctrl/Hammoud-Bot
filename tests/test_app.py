@@ -532,6 +532,24 @@ def test_symbol_defaults_carry_m_suffix_and_resolver_falls_back():
         A.store.meta_set("ta_symbols", saved)
 
 
+def test_market_endpoint_never_waits_on_network():
+    import time as _t
+    saved_fetch = A.live_market
+    try:
+        A.live_market = lambda force=False: _t.sleep(5) or {}
+        c = A.app.test_client()
+        t0 = _t.time()
+        r = c.get("/api/market?force=1")
+        elapsed = _t.time() - t0
+        assert r.status_code == 200
+        assert elapsed < 1.5, f"market request blocked for {elapsed:.1f}s"
+        s0 = _t.time()
+        assert c.get("/api/state").status_code == 200
+        assert _t.time() - s0 < 3
+    finally:
+        A.live_market = saved_fetch
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:
