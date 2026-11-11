@@ -499,6 +499,39 @@ def test_bot_start_stop_endpoints_and_list():
         A.RUN["assets"] = saved_assets
 
 
+def test_closed_profit_unknown_is_none_not_zero():
+    class FakeClient(A.TickerAllClient):
+        def __init__(self):
+            pass
+        def _acct(self, method, suffix, body=None, params=None, idem=False):
+            return {"history": []}
+    assert FakeClient().closed_profit("XAUUSDm", "2026-11-11T00:00:00Z") is None
+
+
+def test_unknown_profit_message_and_stats_do_not_break():
+    t = {"label": "x", "r": None, "pnl_usd": None, "exit_price": None}
+    msg = A.format_close("BTC", t)
+    assert "غير متاح" in msg and "+$0.00" not in msg and "0.0R" not in msg
+
+
+def test_symbol_defaults_carry_m_suffix_and_resolver_falls_back():
+    assert A.TA_DEFAULT_SYMBOLS["XAUUSD"] == "XAUUSDm"
+    assert A.TA_DEFAULT_SYMBOLS["BTCUSDT"] == "BTCUSDm"
+
+    class Client:
+        def spec(self, name):
+            if name.endswith("m"):
+                raise A.TickerAllError(404, "SYMBOL_NOT_FOUND", "no")
+            return {"name": name}
+    saved = A.store.meta_get("ta_symbols")
+    try:
+        found = A.resolve_ta_symbols(A.store, Client())
+        assert found == {"XAUUSD": "XAUUSD", "BTCUSDT": "BTCUSD"}
+        assert A.store.meta_get("ta_symbols") == found
+    finally:
+        A.store.meta_set("ta_symbols", saved)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:

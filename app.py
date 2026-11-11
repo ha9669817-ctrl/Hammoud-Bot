@@ -31,7 +31,7 @@ from flask import Flask, Response, jsonify, request
 # الإعدادات
 # =====================================================================
 CONFIG = {
-    "assets": ["XAUUSDm", "BTCUSDm"],
+    "assets": ["XAUUSD", "BTCUSDT"],  # مفاتيح داخلية؛ اسم الرمز عند الوسيط في TA_DEFAULT_SYMBOLS
     "start_balance": 1000.0,
     "risk_pct": 1.0,
     "check_every_minutes": 15,
@@ -1135,7 +1135,9 @@ def update_open(store: Store, asset, candles, on_close=None):
 # وسيط TickerAll: حسابات MT5 تجريبية عبر API. الوقف والهدف يُحملان على جهة الوسيط.
 # =====================================================================
 TICKERALL_URL = "https://api.tickerall.com"
-TA_DEFAULT_SYMBOLS = {"XAUUSD": "XAUUSD", "BTCUSDT": "BTCUSD"}
+TA_DEFAULT_SYMBOLS = {"XAUUSD": "XAUUSDm", "BTCUSDT": "BTCUSDm"}
+TA_PROFIT_RETRIES = 10
+TA_SYMBOL_CANDIDATES = {"XAUUSD": ["XAUUSDm", "XAUUSD"], "BTCUSDT": ["BTCUSDm", "BTCUSD"]}
 TA_COMMENT = "MA"
 
 
@@ -1258,7 +1260,7 @@ class TickerAllClient:
             if close and since and close >= since:
                 return float(item.get("profit") or 0) + float(item.get("swap") or 0) \
                     + float(item.get("commission") or 0)
-        return 0.0
+        return None
 
 
 TA_ENV_KEYS = ("TICKERALL_API_KEY", "MT5_SERVER", "MT5_ACCOUNT_ID", "MT5_PASSWORD")
@@ -1290,7 +1292,30 @@ def ta_client(store):
 
 def ta_symbol(store, asset):
     c = ta_creds(store) or {}
-    return (c.get("symbols") or {}).get(asset) or TA_DEFAULT_SYMBOLS[asset]
+    return (c.get("symbols") or {}).get(asset) or (store.meta_get("ta_symbols") or {}).get(asset) \
+        or TA_DEFAULT_SYMBOLS[asset]
+
+
+def resolve_ta_symbols(store, client) -> dict:
+    """يختار اسم الرمز الذي يقبله الوسيط فعلاً (مع اللاحقة m أو بدونها) ويحفظه."""
+    found = {}
+    for asset, candidates in TA_SYMBOL_CANDIDATES.items():
+        for name in candidates:
+            try:
+                client.spec(name)
+                found[asset] = name
+                break
+            except TickerAllError:
+                continue
+            except Exception as exc:
+                log_event("warn", f"تعذر التحقق من الرمز {name}: {str(exc)[:100]}")
+                break
+        if asset not in found:
+            log_event("warn", f"لم يُعثر على رمز مطابق لـ {asset} عند الوسيط، سيُستخدم {TA_DEFAULT_SYMBOLS[asset]}")
+    if found:
+        store.meta_set("ta_symbols", found)
+        log_event("info", "رموز الوسيط: " + ", ".join(f"{a}={n}" for a, n in found.items()))
+    return found
 
 
 def ta_sync(asset, store, client, now_ms):
@@ -1303,10 +1328,22 @@ def ta_sync(asset, store, client, now_ms):
     for t in open_ta:
         if t["order_id"] in tickets:
             continue
-        pnl = round(client.closed_profit(ta_symbol(store, asset), t["opened_utc"]), 2)
+        raw = client.closed_profit(ta_symbol(store, asset), t["opened_utc"])
+        key = f"ta_pending|{t['id']}"
+        if raw is None:
+            tries = int(store.meta_get(key) or 0) + 1
+            store.meta_set(key, tries)
+            if tries < TA_PROFIT_RETRIES:
+                continue  # الربح لم يظهر في السجل بعد، نعيد المحاولة في الدورة التالية
+            store.close_trade(t["id"], now_ms, None, None, None)
+            store.meta_set(key, None)
+            closed.append({**t, "exit_price": None, "r": None, "pnl_usd": None})
+            continue
+        pnl = round(raw, 2)
         r = round(pnl / t["risk_usd"], 3) if t["risk_usd"] else 0.0
         store.close_trade(t["id"], now_ms, None, r, pnl)
         store.add_balance(pnl)
+        store.meta_set(key, None)
         closed.append({**t, "exit_price": None, "r": round(r, 2), "pnl_usd": pnl})
     return closed
 
@@ -1493,8 +1530,13 @@ def format_open(label, t, g, mode):
 
 
 def format_close(label, t):
-    icon = "✅" if t["pnl_usd"] > 0 else "❌"
-    return (f"{icon} إغلاق صفقة | {label}\nالنتيجة: {t['r']}R ({t['pnl_usd']:+.2f}$)\n"
+    if t.get("pnl_usd") is None:
+        result = "الربح غير متاح بعد من سجل الوسيط"
+        icon = "ℹ️"
+    else:
+        icon = "✅" if t["pnl_usd"] > 0 else "❌"
+        result = f"{t['r']}R ({t['pnl_usd']:+.2f}$)"
+    return (f"{icon} إغلاق صفقة | {label}\nالنتيجة: {result}\n"
             f"سعر الإغلاق: {fmt(t['exit_price'])}\n{DISCLAIMER}")
 
 
@@ -1830,14 +1872,16 @@ def reconcile_with_broker():
 def _keepalive_loop():
     """يبقي جلسة الوسيط حية، ويعيد الاتصال عند الانقطاع."""
     while True:
-        time.sleep(600)
+        time.sleep(240)
         if not ta_creds(store):
             continue
         try:
             ta_client(store).account_info()
+            meta["ta_test"] = {"ok": True, "at": int(time.time()), "note": "الجلسة نشطة"}
         except Exception:
             try:
                 ta_client(store).connect()
+                meta["ta_test"] = {"ok": True, "at": int(time.time()), "note": "أُعيد الاتصال تلقائياً"}
                 print("[tickerall] keep-alive: reconnected", flush=True)
             except Exception as exc:
                 print(f"[tickerall] keep-alive failed: {type(exc).__name__}", flush=True)
@@ -1916,6 +1960,10 @@ def ta_autoconnect():
         if info.get("balance") is not None:
             store.meta_set("ta_snapshot", {"balance": info.get("balance"), "equity": info.get("equity")})
         meta["ta_test"] = {"ok": True, "at": int(time.time()), "note": "اتصال تلقائي عند التشغيل"}
+        try:
+            resolve_ta_symbols(store, client)
+        except Exception as exc:
+            print(f"[tickerall] symbol resolve: {type(exc).__name__}", flush=True)
         try:
             reconcile_with_broker()
         except Exception as exc:
@@ -2015,8 +2063,8 @@ def _build_state() -> dict:
         running += t["pnl_usd"] or 0
         equity.append({"t": t["closed_utc"], "bal": round(running, 2)})
     wins = [t for t in closed if (t["r"] or 0) > 0]
-    gross_win = sum(t["pnl_usd"] for t in wins)
-    gross_loss = -sum(t["pnl_usd"] for t in closed if (t["r"] or 0) <= 0)
+    gross_win = sum((t["pnl_usd"] or 0) for t in wins)
+    gross_loss = -sum((t["pnl_usd"] or 0) for t in closed if (t["r"] or 0) <= 0)
     assets = {}
     for a in store.get_assets():
         assets[a] = {"label": ASSETS[a]["label"], "champion": store.get_champion(a),
