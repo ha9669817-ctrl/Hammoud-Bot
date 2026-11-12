@@ -114,7 +114,7 @@
       btns.className = "btns";
       for (const a of assets) {
         const running = b.running.includes(a);
-        const blockedWhy = board.blocked && board.blocked[a];
+        const blockedWhy = (board.blocked && board.blocked[a]) || (b.blocked && b.blocked[a]);
         const btn = document.createElement("button");
         btn.dataset.asset = a;
         btn.dataset.bot = b.id;

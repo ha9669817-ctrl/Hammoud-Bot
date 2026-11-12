@@ -597,6 +597,24 @@ def test_module_import_with_scheduler_enabled_has_no_name_errors():
     assert "NameError" not in err, err[-2000:]
 
 
+def test_ai_brain_refused_on_gold_but_allowed_on_bitcoin():
+    import os
+    c = A.app.test_client()
+    os.environ.setdefault("ADMIN_PASSWORD", "t-pass")
+    headers = {"X-Admin-Password": os.environ["ADMIN_PASSWORD"]}
+    saved_balance, saved_assets, saved_master = A.current_balance, dict(A.RUN["assets"]), A.RUN["master"]
+    A.current_balance = lambda: 1000.0
+    try:
+        r = c.post("/api/bot/start", json={"asset": "XAUUSD", "bot": "ai_brain"}, headers=headers)
+        assert r.status_code == 400 and "البيتكوين فقط" in r.get_json()["error"]
+        r = c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "ai_brain"}, headers=headers)
+        assert r.status_code == 200
+    finally:
+        A.current_balance = saved_balance
+        A.RUN["assets"] = saved_assets
+        A.RUN["master"] = saved_master
+
+
 def test_gold_bot_start_is_refused_server_side_below_minimum():
     import os
     c = A.app.test_client()

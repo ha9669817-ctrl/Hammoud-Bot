@@ -1771,6 +1771,16 @@ def asset_blocked_reason(asset: str, balance: float):
     return None
 
 
+# أصول يُمنع فيها بوت معين، مع السبب. الذهب مستبعد للبوت الذكي لأن اختباره التاريخي خاسر.
+BOT_ASSET_BLOCK = {
+    "ai_brain": {"XAUUSD": "البوت الذكي لا يُشغَّل على الذهب: اختباره التاريخي على بيانات حقيقية خاسر، ويعمل على البيتكوين فقط."},
+}
+
+
+def bot_asset_reason(bot: str, asset: str):
+    return BOT_ASSET_BLOCK.get(bot, {}).get(asset)
+
+
 def apply_autostart() -> bool:
     """تشغيل تلقائي عند الإقلاع، مفعّل فقط إذا ضبطت AUTOSTART=1 في Render."""
     if os.getenv("AUTOSTART", "0") != "1":
@@ -2155,6 +2165,7 @@ def _bot_board(closed: list) -> dict:
             board[rule]["running"].append(a)
     for b in board.values():
         b["profit"] = round(b["profit"], 2)
+        b["blocked"] = {a: r for a, r in BOT_ASSET_BLOCK.get(b["id"], {}).items()}
     bal = current_balance()
     blocked = {a: asset_blocked_reason(a, bal) for a in store.get_assets()}
     return {"bots": list(board.values()),
@@ -2564,7 +2575,7 @@ def bot_start():
     asset, bot = body.get("asset"), body.get("bot")
     if asset not in ASSETS or bot not in BOT_FUNCS:
         return jsonify({"error": "أصل أو بوت غير صالح"}), 400
-    blocked = asset_blocked_reason(asset, current_balance())
+    blocked = asset_blocked_reason(asset, current_balance()) or bot_asset_reason(bot, asset)
     if blocked:
         return jsonify({"error": blocked}), 400
     genome = {**BOT_DEFAULTS, "rule": bot}
