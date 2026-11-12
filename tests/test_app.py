@@ -630,7 +630,9 @@ def test_dashboard_page_is_minimal_and_script_is_served():
     c = A.app.test_client()
     html = c.get("/").get_data(as_text=True)
     assert 'id="botList"' in html and 'id="totalProfit"' in html and 'id="balance"' in html
-    assert "chart.js" not in html
+    assert "chart.js" not in html and 'id="link"' in html
+    st = c.get("/api/state").get_json()
+    assert "link" in st and "has_credentials" in st["link"]
     assert c.get("/static/app.js").status_code == 200
 
 

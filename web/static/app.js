@@ -1,4 +1,4 @@
-// لوحة مبسّطة: الرصيد، إجمالي ربح البوتات، وقائمة البوتات مع تشغيل/إيقاف لكل أصل.
+// لوحة مبسّطة: حالة الوسيط، الرصيد، إجمالي ربح البوتات، وقائمة البوتات.
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
@@ -32,14 +32,49 @@
     }
   }
 
+  // يشرح للمستخدم لماذا الوسيط غير متصل، بدون أي رقم وهمي.
+  function renderLink(s) {
+    const link = s.link || {};
+    const box = $("link");
+    const test = link.test || {};
+    const connected = link.source === "tickerall";
+    let cls, title, detail;
+    if (connected && link.mode === "tickerall") {
+      cls = "ok"; title = "الوسيط متصل · التنفيذ على الحساب التجريبي";
+      detail = "الرصيد والأرباح تُقرأ مباشرة من الوسيط.";
+    } else if (connected) {
+      cls = "warn"; title = "الوسيط متصل · التنفيذ ورقي حالياً";
+      detail = "الصفقات محاكاة فقط. لتنفيذها على الحساب التجريبي اضبط DEFAULT_MODE=tickerall في Render.";
+    } else if (!link.has_credentials) {
+      cls = "bad"; title = "الوسيط غير متصل: بيانات الحساب غير موجودة";
+      detail = "أضف في Render المتغيرات: TICKERALL_API_KEY و MT5_SERVER و MT5_ACCOUNT_ID و MT5_PASSWORD ثم أعد النشر.";
+    } else if (test.ok === false) {
+      cls = "bad"; title = "الوسيط غير متصل";
+      detail = "سبب الفشل: " + (test.error || "غير معروف") + ". راجع بيانات الحساب في Render.";
+    } else {
+      cls = "warn"; title = "الوسيط غير متصل بعد";
+      detail = "جارٍ المحاولة. إذا استمرت الحالة راجع سجلات Render.";
+    }
+    box.className = "link " + cls;
+    box.replaceChildren();
+    const b = document.createElement("b");
+    b.textContent = title;
+    const d = document.createElement("span");
+    d.textContent = detail;
+    box.append(b, d);
+    $("liveDot").className = "dot " + (cls === "ok" ? "ok" : cls === "bad" ? "bad" : "warn");
+  }
+
   function renderAccount(s) {
     const acc = s.account || {};
-    $("balance").textContent = acc.balance == null ? "—" : fmt(acc.balance) + " $";
-    if (acc.source === "tickerall") {
-      $("balanceSub").textContent = acc.equity == null ? "حساب تجريبي · من الوسيط"
-        : "حساب تجريبي · الأصول الحالية " + fmt(acc.equity) + " $";
+    const connected = acc.source === "tickerall" && acc.balance != null;
+    if (connected) {
+      $("balance").textContent = fmt(acc.balance) + " $";
+      $("balanceSub").textContent = acc.equity == null ? "حساب تجريبي"
+        : "الأصول الحالية " + fmt(acc.equity) + " $";
     } else {
-      $("balanceSub").textContent = "بانتظار اتصال الوسيط";
+      $("balance").textContent = "—";
+      $("balanceSub").textContent = "يظهر بعد اتصال الوسيط";
     }
   }
 
@@ -58,17 +93,22 @@
     const list = $("botList");
     list.replaceChildren();
     for (const b of board.bots) {
-      const row = document.createElement("div");
-      row.className = "bot";
+      const card = document.createElement("div");
+      card.className = "bot";
 
-      const info = document.createElement("div");
       const name = document.createElement("div");
       name.className = "name";
       name.textContent = b.name;
+      const runningOn = b.running.map((a) => ASSET_NAME[a]).filter(Boolean);
+      if (runningOn.length) {
+        const tag = document.createElement("span");
+        tag.className = "running";
+        tag.textContent = "يعمل · " + runningOn.join("، ");
+        name.append(tag);
+      }
       const meta = document.createElement("div");
       meta.className = "meta";
-      meta.textContent = `${b.trades} صفقة · ربح ${signed(b.profit)}$`;
-      info.append(name, meta);
+      meta.textContent = `${b.trades} صفقة مغلقة · ربح ${signed(b.profit)}$`;
 
       const btns = document.createElement("div");
       btns.className = "btns";
@@ -82,30 +122,29 @@
         if (running) {
           btn.textContent = "إيقاف · " + ASSET_NAME[a];
           btn.className = "stop";
+        } else if (blockedWhy) {
+          btn.textContent = ASSET_NAME[a] + " محظور";
+          btn.disabled = true;
+          btn.title = blockedWhy;
         } else {
           btn.textContent = "تشغيل · " + ASSET_NAME[a];
           btn.className = "on";
-          if (blockedWhy) {
-            btn.disabled = true;
-            btn.title = blockedWhy;
-            btn.textContent = ASSET_NAME[a] + " محظور";
-          }
         }
         btns.append(btn);
       }
-      row.append(info, btns);
-      list.append(row);
+      card.append(name, meta, btns);
+      list.append(card);
     }
   }
 
   async function refresh() {
     try {
       const s = await getState();
+      renderLink(s);
       renderAccount(s);
       renderTotals(s.board || { bots: [] });
       renderBots(s);
-      $("liveDot").className = "dot ok";
-      $("liveText").textContent = "متصل · " + new Date().toLocaleTimeString("ar-SA");
+      $("liveText").textContent = "آخر تحديث " + new Date().toLocaleTimeString("ar-SA");
     } catch (e) {
       $("liveDot").className = "dot bad";
       $("liveText").textContent = "تعذّر تحديث البيانات، سيُعاد المحاولة";
