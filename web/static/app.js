@@ -257,8 +257,8 @@
     } catch (err) { msg(err.message, "err"); }
   }
 
-  $("histMain").addEventListener("click", () => histStart("assets", ["1m", "1h", "1d"]));
-  $("histAll").addEventListener("click", () => histStart("all", ["1h", "1d"]));
+  $("histMain").addEventListener("click", () => histStart("assets", ["1h", "1d", "1w", "1mo"]));
+  $("histAll").addEventListener("click", () => histStart("all", ["1h", "1d", "1w", "1mo"]));
   $("histZip").addEventListener("click", histZip);
   setInterval(histRefresh, 10000);
 
