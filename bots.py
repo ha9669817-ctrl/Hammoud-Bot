@@ -92,5 +92,22 @@ def _wrap(fn):
     return run
 
 
-BOT_FUNCS = {BRAIN_NAME: _wrap(ai_brain)}
-BOT_AR = {BRAIN_NAME: "البوت الذكي (متعدد الفريمات + تعلم من الخسائر)"}
+def bb_revert(df: pd.DataFrame, n: int = 20, k: float = 2.0):
+    """ارتداد من حدود بولنجر: إغلاق يتجاوز الحد السفلي للشراء أو العلوي للبيع.
+    الإعداد الافتراضي (20 و2) اختير قبل النظر إلى النتائج، ولم يُضبط على أفضل نتيجة."""
+    c = df["close"]
+    mid = c.rolling(n).mean()
+    sd = c.rolling(n).std(ddof=0)
+    cl = c.to_numpy()
+    lo = (mid - k * sd).to_numpy()
+    hi = (mid + k * sd).to_numpy()
+    below = np.nan_to_num(cl < lo, nan=False).astype(bool)
+    above = np.nan_to_num(cl > hi, nan=False).astype(bool)
+    buy = below & ~np.r_[False, below[:-1]]
+    sell = above & ~np.r_[False, above[:-1]]
+    return buy, sell
+
+
+BOT_FUNCS = {BRAIN_NAME: _wrap(ai_brain), "bb_revert": _wrap(bb_revert)}
+BOT_AR = {BRAIN_NAME: "البوت الذكي (متعدد الفريمات + تعلم من الخسائر)",
+          "bb_revert": "بوت ارتداد بولنجر (للذهب)"}
