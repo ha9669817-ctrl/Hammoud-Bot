@@ -684,6 +684,31 @@ def test_brain_blocked_context_suppresses_signal():
         bots.BRAIN_BLOCKED.update(saved)
 
 
+def test_candles_export_requires_password_and_returns_csv():
+    import os
+    import numpy as np
+    import pandas as pd
+    os.environ.setdefault("ADMIN_PASSWORD", "t-pass")
+    c = A.app.test_client()
+    assert c.get("/api/candles.csv?asset=XAUUSD").status_code == 401
+    n = 150
+    t = pd.date_range("2026-01-01", periods=n, freq="h", tz="UTC")
+    close = np.linspace(2000, 2010, n)
+    fake = pd.DataFrame({"open_time": t, "open": close, "high": close + 1, "low": close - 1,
+                         "close": close, "volume": 10.0})
+    saved = A.load_market
+    A.load_market = lambda asset: (fake, None)
+    try:
+        r = c.get("/api/candles.csv?asset=XAUUSD", headers={"X-Admin-Password": os.environ["ADMIN_PASSWORD"]})
+        assert r.status_code == 200 and r.mimetype == "text/csv"
+        lines = r.get_data(as_text=True).strip().splitlines()
+        assert lines[0] == "open_time,open,high,low,close,volume" and len(lines) == n + 1
+        bad = c.get("/api/candles.csv?asset=NOPE", headers={"X-Admin-Password": os.environ["ADMIN_PASSWORD"]})
+        assert bad.status_code == 400
+    finally:
+        A.load_market = saved
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:

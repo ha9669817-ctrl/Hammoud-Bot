@@ -2529,6 +2529,22 @@ def trades_csv():
                     headers={"Content-Disposition": "attachment; filename=trades.csv"})
 
 
+@app.get("/api/candles.csv")
+def candles_csv():
+    """شموع الساعة المكتملة لأصل واحد، للاختبار الخارجي (backtest). محمية بكلمة مرور الإدارة."""
+    if not _authorized():
+        return _deny()
+    asset = request.args.get("asset", "XAUUSD")
+    if asset not in ASSETS:
+        return jsonify({"error": "أصل غير صالح"}), 400
+    h1, _ = load_market(asset)
+    cols = [c for c in ["open_time", "open", "high", "low", "close", "volume"] if c in h1.columns]
+    out = h1[cols].copy()
+    out["open_time"] = out["open_time"].astype(str)
+    return Response(out.to_csv(index=False), mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={asset}_H1.csv"})
+
+
 @app.get("/api/champions/export")
 def champions_export():
     if not _authorized():

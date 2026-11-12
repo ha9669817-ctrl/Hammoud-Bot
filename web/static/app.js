@@ -180,6 +180,34 @@
     }
   });
 
+  async function exportCandles(asset) {
+    const pwd = $("pw").value.trim();
+    if (!pwd) { msg("أدخل كلمة مرور الإدارة أولاً", "err"); $("pw").focus(); return; }
+    msg("جارٍ تجهيز الشموع…", "");
+    try {
+      const r = await fetch("/api/candles.csv?asset=" + encodeURIComponent(asset), {
+        headers: { "X-Admin-Password": pwd },
+      });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        throw new Error(data.error || "فشل التصدير (" + r.status + ")");
+      }
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = asset + "_H1.csv";
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      msg("تم تنزيل ملف الشموع", "ok");
+    } catch (err) {
+      msg(err.message, "err");
+    }
+  }
+  $("expXAU").addEventListener("click", () => exportCandles("XAUUSD"));
+  $("expBTC").addEventListener("click", () => exportCandles("BTCUSDT"));
+
   refresh();
   setInterval(refresh, 5000);
 })();
