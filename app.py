@@ -275,6 +275,7 @@ def _ema(s: pd.Series, n: int) -> pd.Series:
 # التاريخي وبوابات التحقق، ولا يُعتمد منها إلا ما ينجح فعلاً.
 # =====================================================================
 from bots import BOT_FUNCS, BOT_AR  # كتالوج البوتات (bots.py)
+import bots as _bots
 RULES = ["sweep", "rsi", "macd", "bollinger", "ema_9_21", "ema_50_200", "supertrend",
          "psar", "ao", "heikin", "dual_thrust", "vwap", "london", "bbma", "bb_reentry",
          "donchian", "ema_pullback", "adx_di"]
@@ -1070,10 +1071,25 @@ def risk_usd(store: Store) -> float:
     return round(store.balance() * CONFIG["risk_pct"] / 100, 2)
 
 
+MAX_OPEN_TOTAL = 3          # أقصى عدد صفقات مفتوحة عبر كل الأصول
+DAILY_LOSS_PCT = 3.0        # إيقاف فتح الصفقات عند خسارة يومية تتجاوز هذه النسبة من الرصيد
+
+
+def daily_pnl(store: Store) -> float:
+    """مجموع أرباح وخسائر الصفقات المغلقة منذ منتصف الليل بتوقيت UTC."""
+    now = datetime.now(timezone.utc)
+    start_ms = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+    return sum((t["pnl_usd"] or 0.0) for t in store.closed_trades() if (t["exit_at"] or 0) >= start_ms)
+
+
 def can_open(store: Store, asset, entry_at) -> bool:
     if store.balance() <= 0:
         return False
     if store.open_trades(asset):
+        return False
+    if len(store.open_trades()) >= MAX_OPEN_TOTAL:
+        return False
+    if daily_pnl(store) <= -store.balance() * DAILY_LOSS_PCT / 100:
         return False
     return not store.has_trade(asset, entry_at)
 
@@ -1567,9 +1583,66 @@ def format_champion(label, g, result):
             f"معامل ربح {v['profit_factor']} | أقصى تراجع {v['max_dd_r']}R\n{DISCLAIMER}")
 
 
+BRAIN_MIN_SAMPLES = 4       # أقل عدد صفقات في السياق قبل أن نحكم عليه
+BRAIN_LOSS_EDGE = 2         # يُحظر السياق إذا زادت خسائره على أرباحه بهذا القدر
+
+
+def brain_refresh(store: Store, asset: str, h1) -> None:
+    """يقرأ الصفقات المغلقة للبوت الذكي، ويحظر السياقات التي خسرت مراراً، ويكتب الدروس في lessons.txt."""
+    if h1 is None or len(h1) < 120:
+        return
+    cb, cs, _, _ = _bots.brain_contexts(h1)
+    idx = {int(t.timestamp() * 1000): i for i, t in enumerate(h1["open_time"].reset_index(drop=True))}
+    stats: dict = {}
+    seen_id = int(store.meta_get(f"brain_seen|{asset}") or 0)
+    lessons = []
+    max_id = seen_id
+    for t in store.closed_trades():
+        if t["asset"] != asset or t["pnl_usd"] is None:
+            continue
+        try:
+            rule = (json.loads(t["genome"] or "{}") or {}).get("rule")
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if rule != _bots.BRAIN_NAME:
+            continue
+        i = idx.get(int(t["entry_at"]) - 3600000)
+        if i is None:
+            continue
+        ctx = cb[i] if t["side"] == "buy" else cs[i]
+        won = t["pnl_usd"] > 0
+        st = stats.setdefault(ctx, {"wins": 0, "losses": 0})
+        st["wins" if won else "losses"] += 1
+        if t["id"] > seen_id and not won:
+            lessons.append(f"خسارة {t['pnl_usd']:+.2f}$ | {t['side']} | {ctx}")
+        max_id = max(max_id, t["id"])
+    blocked = sorted(c for c, st in stats.items()
+                     if st["wins"] + st["losses"] >= BRAIN_MIN_SAMPLES
+                     and st["losses"] >= st["wins"] + BRAIN_LOSS_EDGE)
+    previous = set(store.meta_get(f"brain_blocked|{asset}") or [])
+    for c in blocked:
+        if c not in previous:
+            st = stats[c]
+            lessons.append(f"حظر السياق: {c} | ربح {st['wins']} خسارة {st['losses']}")
+    if lessons:
+        try:
+            path = Path(DB_PATH).resolve().parent / "lessons.txt"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            stamp = utc_now()
+            with path.open("a", encoding="utf-8") as f:
+                for line in lessons:
+                    f.write(f"[{stamp}] {asset} | {line}\n")
+        except OSError as exc:
+            log_event("warn", f"تعذّر كتابة الدروس: {type(exc).__name__}", asset)
+    store.meta_set(f"brain_blocked|{asset}", blocked)
+    store.meta_set(f"brain_seen|{asset}", max_id)
+    _bots.BRAIN_BLOCKED = set(blocked)
+
+
 def trading_cycle(asset: str, store: Store, send_alerts: bool = True) -> dict:
     label = ASSETS[asset]["label"]
     h1, daily = load_market(asset)
+    brain_refresh(store, asset, h1)
     now_ms = int(time.time() * 1000)
     errors, closed = [], []
     extra = {"ta_positions": [], "ta_account": None}
@@ -2013,12 +2086,6 @@ def _market_loop():
         time.sleep(8)
 
 apply_autostart()
-if os.getenv("DISABLE_SCHEDULER") != "1":
-    threading.Thread(target=ta_autoconnect, daemon=True).start()
-    threading.Thread(target=_scheduler, daemon=True).start()
-    threading.Thread(target=_keepalive_loop, daemon=True).start()
-    threading.Thread(target=_watchdog, daemon=True).start()
-    threading.Thread(target=_market_loop, daemon=True).start()
 
 
 def _authorized() -> bool:
@@ -2507,3 +2574,13 @@ def bot_stop():
 
 
 INDEX_HTML = (Path(__file__).resolve().parent / "web" / "index.html").read_text(encoding="utf-8")
+
+
+# تشغيل الخيوط الخلفية في آخر الملف، بعد تعريف كل الدوال والمتغيرات التي تستخدمها،
+# حتى لا تبدأ قبل اكتمال التحميل فتفشل بـ NameError في أول دورة.
+if os.getenv("DISABLE_SCHEDULER") != "1":
+    threading.Thread(target=ta_autoconnect, daemon=True).start()
+    threading.Thread(target=_scheduler, daemon=True).start()
+    threading.Thread(target=_keepalive_loop, daemon=True).start()
+    threading.Thread(target=_watchdog, daemon=True).start()
+    threading.Thread(target=_market_loop, daemon=True).start()

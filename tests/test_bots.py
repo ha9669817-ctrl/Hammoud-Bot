@@ -30,6 +30,10 @@ def test_every_bot_runs_and_returns_aligned_masks():
         assert not np.any(buy & sell), name
 
 
+def test_only_the_adaptive_bot_remains():
+    assert list(bots.BOT_FUNCS) == ["ai_brain"] and list(bots.BOT_AR) == ["ai_brain"]
+
+
 def test_every_bot_has_an_arabic_name():
     assert set(bots.BOT_FUNCS) == set(bots.BOT_AR)
 

@@ -485,13 +485,13 @@ def test_bot_start_stop_endpoints_and_list():
     try:
         state = c.get("/api/state").get_json()
         names = [b["id"] for b in state["bots"]]
-        assert sorted(names) == sorted(["close_momentum", "xau_breakout_pro", "two_candle_reversal"])
+        assert names == ["ai_brain"]
         r = c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "not_a_bot"}, headers=headers)
         assert r.status_code == 400
-        r = c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "close_momentum"}, headers=headers)
+        r = c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "ai_brain"}, headers=headers)
         assert r.status_code == 200, r.get_data(as_text=True)
         assert A.RUN["master"] is True and A.RUN["assets"].get("BTCUSDT") is True
-        assert A.store.get_champion("BTCUSDT")["genome"]["rule"] == "close_momentum"
+        assert A.store.get_champion("BTCUSDT")["genome"]["rule"] == "ai_brain"
         r = c.post("/api/bot/stop", json={"asset": "BTCUSDT"}, headers=headers)
         assert r.status_code == 200 and A.RUN["assets"].get("BTCUSDT") is False
     finally:
@@ -605,7 +605,7 @@ def test_gold_bot_start_is_refused_server_side_below_minimum():
     saved_balance, saved_assets, saved_master = A.current_balance, dict(A.RUN["assets"]), A.RUN["master"]
     A.current_balance = lambda: 20.0
     try:
-        r = c.post("/api/bot/start", json={"asset": "XAUUSD", "bot": "close_momentum"}, headers=headers)
+        r = c.post("/api/bot/start", json={"asset": "XAUUSD", "bot": "ai_brain"}, headers=headers)
         assert r.status_code == 400 and "محظور" in r.get_json()["error"]
         assert not A.RUN["assets"].get("XAUUSD")
     finally:
@@ -616,12 +616,12 @@ def test_gold_bot_start_is_refused_server_side_below_minimum():
 
 def test_bot_board_profit_grouped_by_rule():
     closed = [
-        {"genome": json.dumps({"rule": "close_momentum"}), "pnl_usd": 5.0},
-        {"genome": json.dumps({"rule": "close_momentum"}), "pnl_usd": -2.0},
+        {"genome": json.dumps({"rule": "ai_brain"}), "pnl_usd": 5.0},
+        {"genome": json.dumps({"rule": "ai_brain"}), "pnl_usd": -2.0},
         {"genome": "not-json", "pnl_usd": 9.0},
     ]
     board = A._bot_board(closed)
-    d = next(b for b in board["bots"] if b["id"] == "close_momentum")
+    d = next(b for b in board["bots"] if b["id"] == "ai_brain")
     assert d["profit"] == 3.0 and d["trades"] == 2
     assert board["total_profit"] == 12.0
 
@@ -634,6 +634,54 @@ def test_dashboard_page_is_minimal_and_script_is_served():
     st = c.get("/api/state").get_json()
     assert "link" in st and "has_credentials" in st["link"]
     assert c.get("/static/app.js").status_code == 200
+
+
+def _temp_store():
+    import tempfile
+    path = os.path.join(tempfile.mkdtemp(), "t.db")
+    return A.Store(path, 1000.0)
+
+
+def test_max_three_open_trades_across_assets():
+    st = _temp_store()
+    for i, asset in enumerate(["XAUUSD", "BTCUSDT", "XAUUSD"]):
+        st.open_trade(asset, "{}", "buy", 1_000 + i, 1.0, 0.9, 1.2, 0.1, 10.0, mode="paper")
+    assert len(st.open_trades()) == 3
+    assert A.can_open(st, "BTCUSDT", 9_999_999) is False
+
+
+def test_daily_loss_stop_blocks_new_trades():
+    import time as _t
+    st = _temp_store()
+    tid = st.open_trade("BTCUSDT", "{}", "buy", 2_000, 1.0, 0.9, 1.2, 0.1, 10.0, mode="paper")
+    st.close_trade(tid, int(_t.time() * 1000), 0.9, -1.0, -50.0)
+    assert A.daily_pnl(st) == -50.0
+    assert A.can_open(st, "BTCUSDT", 9_999_998) is False
+
+
+def test_brain_blocked_context_suppresses_signal():
+    import numpy as np
+    import pandas as pd
+    import bots
+    n = 24 * 120
+    t = pd.date_range("2026-01-01", periods=n, freq="h", tz="UTC")
+    rng = np.random.default_rng(3)
+    close = 2000 + np.cumsum(rng.normal(0.3, 4, n))
+    o = np.r_[close[0], close[:-1]]
+    df = pd.DataFrame({"open_time": t, "open": o, "high": np.maximum(o, close) + 1,
+                       "low": np.minimum(o, close) - 1, "close": close, "volume": 100.0})
+    buy, _ = bots.BOT_FUNCS["ai_brain"](df)
+    assert buy.sum() > 0
+    cb, _, rb, _ = bots.brain_contexts(df)
+    saved = set(bots.BRAIN_BLOCKED)
+    try:
+        bots.BRAIN_BLOCKED.clear()
+        bots.BRAIN_BLOCKED.update(set(cb[rb]))
+        blocked_buy, _ = bots.BOT_FUNCS["ai_brain"](df)
+        assert blocked_buy.sum() == 0
+    finally:
+        bots.BRAIN_BLOCKED.clear()
+        bots.BRAIN_BLOCKED.update(saved)
 
 
 if __name__ == "__main__":
