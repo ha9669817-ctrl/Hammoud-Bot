@@ -197,7 +197,7 @@ def test_browser_script_parses():
 def test_page_and_assets_are_served():
     c = A.app.test_client()
     page = c.get("/").get_data(as_text=True)
-    assert "/static/app.js" in page and 'id="statusBar"' in page and 'id="closedFilter"' in page
+    assert "/static/app.js" in page and 'id="botList"' in page and 'id="totalProfit"' in page
     assert c.get("/static/app.js").status_code == 200
     assert c.get("/static/app.css").status_code == 200
 
@@ -578,12 +578,6 @@ def test_market_endpoint_never_waits_on_network():
         A.live_market = saved_fetch
 
 
-if __name__ == "__main__":
-    tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
-    for fn in tests:
-        fn()
-        print("ok", fn.__name__)
-    print(f"ALL {len(tests)} TESTS PASSED")
 
 
 def test_module_import_with_scheduler_enabled_has_no_name_errors():
@@ -601,3 +595,48 @@ def test_module_import_with_scheduler_enabled_has_no_name_errors():
     except subprocess.TimeoutExpired as exc:
         err = (exc.stderr or b"").decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
     assert "NameError" not in err, err[-2000:]
+
+
+def test_gold_bot_start_is_refused_server_side_below_minimum():
+    import os
+    c = A.app.test_client()
+    os.environ.setdefault("ADMIN_PASSWORD", "t-pass")
+    headers = {"X-Admin-Password": os.environ["ADMIN_PASSWORD"]}
+    saved_balance, saved_assets, saved_master = A.current_balance, dict(A.RUN["assets"]), A.RUN["master"]
+    A.current_balance = lambda: 20.0
+    try:
+        r = c.post("/api/bot/start", json={"asset": "XAUUSD", "bot": "donchian"}, headers=headers)
+        assert r.status_code == 400 and "محظور" in r.get_json()["error"]
+        assert not A.RUN["assets"].get("XAUUSD")
+    finally:
+        A.current_balance = saved_balance
+        A.RUN["assets"] = saved_assets
+        A.RUN["master"] = saved_master
+
+
+def test_bot_board_profit_grouped_by_rule():
+    closed = [
+        {"genome": json.dumps({"rule": "donchian"}), "pnl_usd": 5.0},
+        {"genome": json.dumps({"rule": "donchian"}), "pnl_usd": -2.0},
+        {"genome": "not-json", "pnl_usd": 9.0},
+    ]
+    board = A._bot_board(closed)
+    d = next(b for b in board["bots"] if b["id"] == "donchian")
+    assert d["profit"] == 3.0 and d["trades"] == 2
+    assert board["total_profit"] == 12.0
+
+
+def test_dashboard_page_is_minimal_and_script_is_served():
+    c = A.app.test_client()
+    html = c.get("/").get_data(as_text=True)
+    assert 'id="botList"' in html and 'id="totalProfit"' in html and 'id="balance"' in html
+    assert "chart.js" not in html
+    assert c.get("/static/app.js").status_code == 200
+
+
+if __name__ == "__main__":
+    tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
+    for fn in tests:
+        fn()
+        print("ok", fn.__name__)
+    print(f"ALL {len(tests)} TESTS PASSED")

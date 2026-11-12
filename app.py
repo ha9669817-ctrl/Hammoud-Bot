@@ -2071,6 +2071,30 @@ def _settings() -> dict:
     }
 
 
+def _bot_board(closed: list) -> dict:
+    """لوحة البوتات: ربح كل بوت من صفقاته المغلقة، وأي أصل يعمل عليه الآن، والأصول الممنوعة."""
+    board = {k: {"id": k, "name": v, "profit": 0.0, "trades": 0, "running": []} for k, v in BOT_AR.items()}
+    for t in closed:
+        try:
+            rule = (json.loads(t["genome"] or "{}") or {}).get("rule")
+        except (ValueError, TypeError, AttributeError):
+            rule = None
+        if rule in board:
+            board[rule]["profit"] += t["pnl_usd"] or 0.0
+            board[rule]["trades"] += 1
+    for a in store.get_assets():
+        rule = ((store.get_champion(a) or {}).get("genome") or {}).get("rule")
+        if rule in board and RUN["master"] and RUN["assets"].get(a):
+            board[rule]["running"].append(a)
+    for b in board.values():
+        b["profit"] = round(b["profit"], 2)
+    bal = current_balance()
+    blocked = {a: asset_blocked_reason(a, bal) for a in store.get_assets()}
+    return {"bots": list(board.values()),
+            "total_profit": round(sum(t["pnl_usd"] or 0.0 for t in closed), 2),
+            "blocked": {a: r for a, r in blocked.items() if r}}
+
+
 def _build_state() -> dict:
     balance = store.balance()
     start = CONFIG["start_balance"]
@@ -2118,6 +2142,7 @@ def _build_state() -> dict:
                    "busy": scan_busy(), "now": int(time.time()), "peak_mb": _rss_mb()},
         "activity": list(activity)[:40],
         "bots": [{"id": k, "name": v} for k, v in BOT_AR.items()],
+        "board": _bot_board(closed),
         "trading": {"master": RUN["master"],
                     "assets": {a: bool(RUN["assets"].get(a)) for a in store.get_assets()},
                     "locked": {a: bool(store.meta_get(f"lock|{a}")) for a in store.get_assets()}},
@@ -2452,6 +2477,9 @@ def bot_start():
     asset, bot = body.get("asset"), body.get("bot")
     if asset not in ASSETS or bot not in BOT_FUNCS:
         return jsonify({"error": "أصل أو بوت غير صالح"}), 400
+    blocked = asset_blocked_reason(asset, current_balance())
+    if blocked:
+        return jsonify({"error": blocked}), 400
     genome = {**BOT_DEFAULTS, "rule": bot}
     store.set_champion(asset, {"genome": genome, "score": 0.0,
                                "result": {"note": "تشغيل يدوي من قائمة البوتات"}, "since": utc_now()})
