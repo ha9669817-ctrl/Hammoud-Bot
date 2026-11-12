@@ -485,13 +485,13 @@ def test_bot_start_stop_endpoints_and_list():
     try:
         state = c.get("/api/state").get_json()
         names = [b["id"] for b in state["bots"]]
-        assert "donchian" in names and "xau_breakout_pro" in names and "two_candle_reversal" in names and len(names) == 16
+        assert sorted(names) == sorted(["close_momentum", "xau_breakout_pro", "two_candle_reversal"])
         r = c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "not_a_bot"}, headers=headers)
         assert r.status_code == 400
-        r = c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "donchian"}, headers=headers)
+        r = c.post("/api/bot/start", json={"asset": "BTCUSDT", "bot": "close_momentum"}, headers=headers)
         assert r.status_code == 200, r.get_data(as_text=True)
         assert A.RUN["master"] is True and A.RUN["assets"].get("BTCUSDT") is True
-        assert A.store.get_champion("BTCUSDT")["genome"]["rule"] == "donchian"
+        assert A.store.get_champion("BTCUSDT")["genome"]["rule"] == "close_momentum"
         r = c.post("/api/bot/stop", json={"asset": "BTCUSDT"}, headers=headers)
         assert r.status_code == 200 and A.RUN["assets"].get("BTCUSDT") is False
     finally:
@@ -605,7 +605,7 @@ def test_gold_bot_start_is_refused_server_side_below_minimum():
     saved_balance, saved_assets, saved_master = A.current_balance, dict(A.RUN["assets"]), A.RUN["master"]
     A.current_balance = lambda: 20.0
     try:
-        r = c.post("/api/bot/start", json={"asset": "XAUUSD", "bot": "donchian"}, headers=headers)
+        r = c.post("/api/bot/start", json={"asset": "XAUUSD", "bot": "close_momentum"}, headers=headers)
         assert r.status_code == 400 and "محظور" in r.get_json()["error"]
         assert not A.RUN["assets"].get("XAUUSD")
     finally:
@@ -616,12 +616,12 @@ def test_gold_bot_start_is_refused_server_side_below_minimum():
 
 def test_bot_board_profit_grouped_by_rule():
     closed = [
-        {"genome": json.dumps({"rule": "donchian"}), "pnl_usd": 5.0},
-        {"genome": json.dumps({"rule": "donchian"}), "pnl_usd": -2.0},
+        {"genome": json.dumps({"rule": "close_momentum"}), "pnl_usd": 5.0},
+        {"genome": json.dumps({"rule": "close_momentum"}), "pnl_usd": -2.0},
         {"genome": "not-json", "pnl_usd": 9.0},
     ]
     board = A._bot_board(closed)
-    d = next(b for b in board["bots"] if b["id"] == "donchian")
+    d = next(b for b in board["bots"] if b["id"] == "close_momentum")
     assert d["profit"] == 3.0 and d["trades"] == 2
     assert board["total_profit"] == 12.0
 

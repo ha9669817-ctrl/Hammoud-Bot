@@ -43,15 +43,6 @@ def test_bots_survive_flat_and_short_data():
         assert len(buy) == 60 and len(sell) == 60, name
 
 
-def test_donchian_signal_on_clear_breakout():
-    df = _frame(60, 5)
-    df.loc[:, ["open", "high", "low", "close"]] = 100.0
-    df.loc[40, ["high", "close", "open"]] = [120.0, 115.0, 100.0]
-    df.loc[40, "low"] = 99.0
-    buy, sell = bots.donchian_breakout(df, 20)
-    assert buy[40] and not sell[40]
-
-
 def test_no_grid_bot_is_claimed():
     assert "grid" not in bots.BOT_FUNCS
 
