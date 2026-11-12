@@ -208,6 +208,60 @@
   $("expXAU").addEventListener("click", () => exportCandles("XAUUSD"));
   $("expBTC").addEventListener("click", () => exportCandles("BTCUSDT"));
 
+  async function histStart(symbols, intervals) {
+    const pwd = $("pw").value.trim();
+    if (!pwd) { msg("أدخل كلمة مرور الإدارة أولاً", "err"); $("pw").focus(); return; }
+    try {
+      const r = await fetch("/api/history/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Password": pwd },
+        body: JSON.stringify({ symbols, intervals, days: 365 }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || "فشل الطلب (" + r.status + ")");
+      msg(data.note || "بدأ السحب", "ok");
+      histRefresh();
+    } catch (err) { msg(err.message, "err"); }
+  }
+
+  async function histRefresh() {
+    const pwd = $("pw").value.trim();
+    if (!pwd) return;
+    try {
+      const r = await fetch("/api/history/status", { headers: { "X-Admin-Password": pwd }, cache: "no-store" });
+      if (!r.ok) return;
+      const s = await r.json();
+      const jobs = Object.entries(s.jobs || {});
+      const done = jobs.filter(([, j]) => j.status === "done").length;
+      const failed = jobs.filter(([, j]) => j.status === "error");
+      const lines = [
+        s.running ? "السحب قيد التنفيذ…" : (s.finished ? "انتهى السحب في " + s.finished : "لم يبدأ أي سحب بعد"),
+        "مكتمل: " + done + " من " + jobs.length + (failed.length ? " · أخطاء: " + failed.length : ""),
+      ];
+      for (const [k, j] of failed.slice(0, 5)) lines.push("✗ " + k + ": " + (j.error || ""));
+      $("histOut").textContent = lines.join("\n");
+    } catch (e) {}
+  }
+
+  async function histZip() {
+    const pwd = $("pw").value.trim();
+    if (!pwd) { msg("أدخل كلمة مرور الإدارة أولاً", "err"); $("pw").focus(); return; }
+    try {
+      const r = await fetch("/api/history/zip", { headers: { "X-Admin-Password": pwd } });
+      if (!r.ok) throw new Error("فشل التحميل (" + r.status + ")");
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url; a.download = "history.zip";
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) { msg(err.message, "err"); }
+  }
+
+  $("histMain").addEventListener("click", () => histStart("assets", ["1m", "1h", "1d"]));
+  $("histAll").addEventListener("click", () => histStart("all", ["1h", "1d"]));
+  $("histZip").addEventListener("click", histZip);
+  setInterval(histRefresh, 10000);
+
   refresh();
   setInterval(refresh, 5000);
 })();

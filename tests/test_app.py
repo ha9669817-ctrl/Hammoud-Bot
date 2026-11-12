@@ -727,6 +727,37 @@ def test_candles_export_requires_password_and_returns_csv():
         A.load_market = saved
 
 
+def test_history_fetch_paginates_when_server_caps_batches():
+    import pandas as pd
+
+    class CappedClient(A.TickerAllClient):
+        """خادم وهمي يعيد 50 شمعة كحد أقصى في الطلب الواحد، رغم طلب 500."""
+        def __init__(self):
+            self.calls = 0
+        def _acct(self, method, suffix, body=None, params=None, idem=False):
+            self.calls += 1
+            t_from, t_to = pd.Timestamp(params["from"]), pd.Timestamp(params["to"])
+            times = pd.date_range(t_from.ceil("h"), t_to, freq="h", inclusive="left", tz="UTC")[:50]
+            return {"candles": [{"time": t.isoformat(), "open": 1.0, "high": 2.0, "low": 0.5,
+                                 "close": 1.5, "tick_volume": 3} for t in times]}
+
+    start = pd.Timestamp("2026-01-01", tz="UTC")
+    end = start + pd.Timedelta(days=10)
+    c = CappedClient()
+    rows = []
+    A.fetch_candles_span(c, "BTCUSDm", "1h", start, end, rows.extend)
+    times = [r[0] for r in rows]
+    assert len(times) == 240 and len(set(times)) == 240, len(times)
+    assert times == sorted(times) and times[0] == start and times[-1] == end - pd.Timedelta(hours=1)
+
+
+def test_history_endpoints_require_password():
+    c = A.app.test_client()
+    assert c.post("/api/history/start", json={"symbols": "assets"}).status_code == 401
+    assert c.get("/api/history/status").status_code == 401
+    assert c.get("/api/history/zip").status_code == 401
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:

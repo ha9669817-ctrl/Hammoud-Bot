@@ -1,12 +1,14 @@
 """مركز التحليل الذاتي: ملف واحد يعمل مباشرة على Render.
 المالك والمطور: HAMAD.
 يشمل: جلب البيانات، الاختبار التاريخي، البحث التطوري، التنفيذ الورقي والتجريبي، الجدولة، واللوحة."""
+import csv
 import hashlib
 import hmac
 import json
 import math
 import os
 import random
+import re
 import faulthandler
 import resource
 import sys
@@ -2554,6 +2556,155 @@ def candles_csv():
     out["open_time"] = out["open_time"].astype(str)
     return Response(out.to_csv(index=False), mimetype="text/csv",
                     headers={"Content-Disposition": f"attachment; filename={asset}_H1.csv"})
+
+
+# ---- سحب تاريخ الشموع في الخلفية (سنة كاملة، لكل الأزواج) ----
+HIST_DIR = Path(DB_PATH).resolve().parent / "history"
+HIST_TF = {"1m": "M1", "1h": "H1", "1d": "D1"}
+HIST_CHUNK = 500            # عدد الشموع في الطلب الواحد
+HIST_LOCK = threading.Lock()
+HIST = {"running": False, "started": None, "finished": None, "jobs": {}}
+
+
+def _hist_name(symbol: str, interval: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", symbol)
+    return f"{safe}_{interval}.csv"
+
+
+def fetch_candles_span(client, symbol: str, interval: str, start, end, sink) -> int:
+    """يسحب شموع interval بين start و end على دفعات. إذا أعاد الوسيط أقل من المطلوب
+    يكمل من آخر شمعة وصلت، فلا تضيع شموع بسبب سقف الخادم."""
+    tf = HIST_TF[interval]
+    step = pd.Timedelta(seconds=INTERVAL_SEC[interval])
+    cur, seen, total = start, set(), 0
+    while cur < end:
+        win_end = min(end, cur + step * HIST_CHUNK)
+        data = client._acct("GET", "/candles", params={
+            "symbol": symbol, "timeframe": tf, "count": HIST_CHUNK,
+            "from": cur.isoformat(), "to": win_end.isoformat()})
+        rows = []
+        for c in _items(data, "candles", "data", "items", "bars") or []:
+            if not isinstance(c, dict) or c.get("open") is None:
+                continue
+            t = _ts_any(c.get("time") or c.get("timestamp") or c.get("open_time") or c.get("t"))
+            if t is None:
+                continue
+            t = pd.to_datetime(t, utc=True)
+            rows.append((t, float(c["open"]), float(c["high"]), float(c["low"]), float(c["close"]),
+                         float(c.get("tick_volume") or c.get("volume") or 0)))
+        fresh = []
+        for r in rows:
+            if r[0] not in seen and cur <= r[0] < end:
+                seen.add(r[0])
+                fresh.append(r)
+        if fresh:
+            sink(fresh)  # يُكتب إلى الملف مباشرة، فلا تتراكم الذاكرة
+            total += len(fresh)
+        seen = {r for r in seen if r >= cur - step * 2} if len(seen) > 5000 else seen
+        if rows:
+            # إن لم تصل الشموع إلى نهاية النافذة (سقف الخادم أو فجوة إغلاق السوق) نكمل من آخر شمعة.
+            # التقدم مضمون: المؤشر لا يرجع أبداً حتى لو أعاد الخادم شموعاً أقدم.
+            last = max(r[0] for r in rows)
+            cur = max(last + step, cur + step)
+        else:
+            cur = win_end
+        time.sleep(0.2)  # تهدئة لتفادي تجاوز حدود الوسيط
+    return total
+
+
+def run_history_job(symbols: list, intervals: list, days: int) -> None:
+    client = ta_client(store)
+    end = pd.Timestamp.now(tz="UTC").floor("min")
+    start = end - pd.Timedelta(days=days)
+    HIST_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        for sym in symbols:
+            for itv in intervals:
+                key = f"{sym}|{itv}"
+                with HIST_LOCK:
+                    HIST["jobs"][key] = {"status": "running", "rows": 0}
+                try:
+                    path = HIST_DIR / _hist_name(sym, itv)
+                    with path.open("w", encoding="utf-8", newline="") as fh:
+                        writer = csv.writer(fh)
+                        writer.writerow(["open_time", "open", "high", "low", "close", "volume"])
+
+                        def sink(batch):
+                            for t, o, h, l, c, v in batch:
+                                writer.writerow([str(t), o, h, l, c, v])
+
+                        n = fetch_candles_span(client, sym, itv, start, end, sink)
+                    status = {"status": "done", "rows": n}
+                except Exception as exc:
+                    status = {"status": "error", "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                with HIST_LOCK:
+                    HIST["jobs"][key] = {**HIST["jobs"].get(key, {}), **status}
+                log_event("info", f"سحب {sym} {itv}: {status.get('status')} {status.get('rows', '')}")
+    finally:
+        with HIST_LOCK:
+            HIST["running"] = False
+            HIST["finished"] = utc_now()
+
+
+@app.post("/api/history/start")
+def history_start():
+    if not _authorized():
+        return _deny()
+    body = request.get_json(silent=True) or {}
+    client = ta_client(store)
+    if client is None:
+        return jsonify({"error": "الوسيط غير مضبوط بعد. أضف بيانات الحساب في Render"}), 400
+    intervals = body.get("intervals") or ["1h", "1d"]
+    if not intervals or any(i not in HIST_TF for i in intervals):
+        return jsonify({"error": "فريمات غير صالحة. المسموح: 1m و 1h و 1d"}), 400
+    try:
+        days = int(body.get("days") or 365)
+    except (TypeError, ValueError):
+        return jsonify({"error": "عدد الأيام غير صالح"}), 400
+    if not 1 <= days <= 400:
+        return jsonify({"error": "عدد الأيام يجب أن يكون بين 1 و 400"}), 400
+    symbols = body.get("symbols") or "all"
+    try:
+        if symbols == "assets":
+            symbols = [ta_symbol(store, a) for a in store.get_assets()]
+        elif symbols == "all":
+            symbols = client.symbols()
+        symbols = [str(x) for x in symbols if str(x).strip()]
+    except Exception as exc:
+        return jsonify({"error": f"تعذّر قراءة قائمة الرموز: {type(exc).__name__}"}), 502
+    if not symbols:
+        return jsonify({"error": "لا توجد رموز للسحب"}), 400
+    with HIST_LOCK:
+        if HIST["running"]:
+            return jsonify({"error": "يوجد سحب قيد التنفيذ، انتظر انتهاءه"}), 409
+        HIST.update({"running": True, "started": utc_now(), "finished": None, "jobs": {}})
+    threading.Thread(target=run_history_job, args=(symbols, intervals, days), daemon=True).start()
+    return jsonify({"ok": True, "note": f"بدأ السحب: {len(symbols)} رمز × {len(intervals)} فريم، {days} يوم"})
+
+
+@app.get("/api/history/status")
+def history_status():
+    if not _authorized():
+        return _deny()
+    with HIST_LOCK:
+        snap = json.loads(json.dumps(HIST, default=str))
+    files = sorted(p.name for p in HIST_DIR.glob("*.csv")) if HIST_DIR.exists() else []
+    return jsonify({**snap, "files": files})
+
+
+@app.get("/api/history/zip")
+def history_zip():
+    if not _authorized():
+        return _deny()
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    files = sorted(HIST_DIR.glob("*.csv")) if HIST_DIR.exists() else []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in files:
+            z.write(f, arcname=f.name)
+    return Response(buf.getvalue(), mimetype="application/zip",
+                    headers={"Content-Disposition": "attachment; filename=history.zip"})
 
 
 @app.get("/api/champions/export")
