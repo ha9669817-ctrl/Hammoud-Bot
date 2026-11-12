@@ -1137,6 +1137,8 @@ def update_open(store: Store, asset, candles, on_close=None):
 TICKERALL_URL = "https://api.tickerall.com"
 TA_DEFAULT_SYMBOLS = {"XAUUSD": "XAUUSDm", "BTCUSDT": "BTCUSDm"}
 TA_PROFIT_RETRIES = 10
+TA_PROFIT_NOW_TRIES = 3   # محاولات فورية داخل الدورة نفسها قبل التأجيل
+TA_PROFIT_WAIT_S = 2
 TA_SYMBOL_CANDIDATES = {"XAUUSD": ["XAUUSDm", "XAUUSD"], "BTCUSDT": ["BTCUSDm", "BTCUSD"]}
 TA_COMMENT = "MA"
 
@@ -1252,15 +1254,28 @@ class TickerAllClient:
             "volume": volume, "stopLoss": round(sl, 5), "takeProfit": round(tp, 5),
             "comment": TA_COMMENT}, idem=True)
 
-    def closed_profit(self, symbol, since_iso) -> float:
-        since = _parse_ts(since_iso)
-        data = self._acct("GET", "/history", params={"symbol": symbol, "from": since_iso, "limit": 50})
+    def closed_profit(self, ticket, since_iso):
+        """الربح الفعلي لصفقة من سجل الوسيط، بمطابقة رقم التذكرة لا اسم الرمز.
+        في MT5 يربط معرّف المركز صفقة الدخول وصفقة الخروج، فنجمع كل صفقات المركز.
+        يعيد None إذا لم تظهر صفقة الخروج بعد (لا يُعتبر ذلك ربحاً صفرياً)."""
+        want = str(ticket)
+        data = self._acct("GET", "/history", params={"from": since_iso, "limit": 500})
+        total, has_exit = 0.0, False
         for item in _items(data, "history", "items", "deals"):
-            close = _parse_ts(item.get("closeTime"))
-            if close and since and close >= since:
-                return float(item.get("profit") or 0) + float(item.get("swap") or 0) \
-                    + float(item.get("commission") or 0)
-        return None
+            if not isinstance(item, dict):
+                continue
+            ids = {str(item[k]) for k in HISTORY_ID_KEYS if item.get(k) is not None}
+            if want not in ids:
+                continue
+            entry = str(item.get("entry") or "").upper()
+            if item.get("closeTime") or "OUT" in entry:
+                has_exit = True
+            total += float(item.get("profit") or 0) + float(item.get("swap") or 0) \
+                + float(item.get("commission") or 0)
+        return round(total, 2) if has_exit else None
+
+
+HISTORY_ID_KEYS = ("positionId", "position_id", "positionTicket", "orderId", "order_id")
 
 
 TA_ENV_KEYS = ("TICKERALL_API_KEY", "MT5_SERVER", "MT5_ACCOUNT_ID", "MT5_PASSWORD")
@@ -1328,7 +1343,12 @@ def ta_sync(asset, store, client, now_ms):
     for t in open_ta:
         if t["order_id"] in tickets:
             continue
-        raw = client.closed_profit(ta_symbol(store, asset), t["opened_utc"])
+        raw = None
+        for attempt in range(TA_PROFIT_NOW_TRIES):
+            raw = client.closed_profit(t["order_id"], t["opened_utc"])
+            if raw is not None or attempt == TA_PROFIT_NOW_TRIES - 1:
+                break
+            time.sleep(TA_PROFIT_WAIT_S)  # الوسيط يسجّل الخروج بعد لحظات أحياناً
         key = f"ta_pending|{t['id']}"
         if raw is None:
             tries = int(store.meta_get(key) or 0) + 1

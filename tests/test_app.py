@@ -499,13 +499,41 @@ def test_bot_start_stop_endpoints_and_list():
         A.RUN["assets"] = saved_assets
 
 
+class _HistoryClient(A.TickerAllClient):
+    """عميل وهمي يعيد سجل صفقات ثابتاً، بلا اتصال بالشبكة."""
+    def __init__(self, items):
+        self.items = items
+    def _acct(self, method, suffix, body=None, params=None, idem=False):
+        return {"history": self.items}
+
+
 def test_closed_profit_unknown_is_none_not_zero():
-    class FakeClient(A.TickerAllClient):
-        def __init__(self):
-            pass
-        def _acct(self, method, suffix, body=None, params=None, idem=False):
-            return {"history": []}
-    assert FakeClient().closed_profit("XAUUSDm", "2026-11-11T00:00:00Z") is None
+    assert _HistoryClient([]).closed_profit("555", "2026-11-11T00:00:00Z") is None
+
+
+def test_closed_profit_matches_by_ticket_not_symbol():
+    items = [
+        # صفقة أخرى على الرمز نفسه أُغلقت بعد فتح صفقتنا (كان القديم سيأخذها خطأً)
+        {"positionId": "777", "symbol": "BTCUSDm", "profit": 9.0, "swap": 0, "commission": 0,
+         "entry": "OUT", "closeTime": "2026-11-11T10:00:00Z"},
+        {"positionId": "555", "symbol": "BTCUSDm", "profit": -3.5, "swap": -0.1, "commission": -0.2,
+         "entry": "OUT", "closeTime": "2026-11-11T11:00:00Z"},
+    ]
+    assert _HistoryClient(items).closed_profit("555", "2026-11-11T00:00:00Z") == -3.8
+
+
+def test_closed_profit_sums_entry_and_exit_deals_of_same_position():
+    items = [
+        {"positionId": "555", "profit": 0, "commission": -0.5, "entry": "IN"},
+        {"positionId": "555", "profit": 12.25, "commission": -0.5, "entry": "OUT",
+         "closeTime": "2026-11-11T11:00:00Z"},
+    ]
+    assert _HistoryClient(items).closed_profit("555", "2026-11-11T00:00:00Z") == 11.25
+
+
+def test_closed_profit_open_position_with_only_entry_is_none():
+    items = [{"positionId": "555", "profit": 0, "commission": -0.5, "entry": "IN"}]
+    assert _HistoryClient(items).closed_profit("555", "2026-11-11T00:00:00Z") is None
 
 
 def test_unknown_profit_message_and_stats_do_not_break():
