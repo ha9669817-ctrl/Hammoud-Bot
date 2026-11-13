@@ -171,5 +171,63 @@ class TestExecutor(unittest.TestCase):
             ex.close_now(555)
 
 
+class FakeLiveExecutor:
+    """منفذ وهمي: يفتح بتذكرة، ويعلن الإغلاق بربح ثابت عند أول استعلام بعد الفتح."""
+    def __init__(self, profit=10.0, accept=True):
+        self.opened = []
+        self.profit = profit
+        self.accept = accept
+        self._closed_next = {}
+
+    def open(self, symbol, side, entry_ref, stop, target, risk_money, comment):
+        if not self.accept:
+            return {"opened": False, "reason": "مرفوض للتجربة"}
+        self.opened.append((symbol, side, entry_ref, stop, target, risk_money))
+        ticket = 1000 + len(self.opened)
+        self._closed_next[ticket] = 0
+        return {"opened": True, "ticket": ticket, "volume": 0.01, "comment": comment}
+
+    def check_closed(self, ticket, symbol, since_iso):
+        self._closed_next[ticket] = self._closed_next.get(ticket, 0) + 1
+        if self._closed_next[ticket] >= 1:
+            return True, self.profit
+        return False, None
+
+
+class TestLiveRunner(unittest.TestCase):
+    def _df(self):
+        return synthetic(1500)
+
+    def test_live_runner_sends_stop_target_and_records_broker_close(self):
+        from smartbot.runner import LiveRunner
+        df = self._df()
+        with tempfile.TemporaryDirectory() as d:
+            bot = SmartBot(Journal(d), start_balance=1000.0)
+            bot.spec = Spec(side=1, atoms=("above_ema200", "rsi_mid"), stop_atr=1.5, rr=2.0, max_bars=24)
+            ex = FakeLiveExecutor(profit=10.0)
+            runner = LiveRunner(bot, ex, "XAUUSDm", lambda: df)
+            runner.tick()
+            self.assertGreater(len(ex.opened), 0, "no order was sent")
+            symbol, side, entry, stop, target, risk = ex.opened[0]
+            self.assertEqual(symbol, "XAUUSDm")
+            self.assertEqual(side, "buy")
+            self.assertLess(stop, entry)
+            self.assertGreater(target, entry)
+            closes = bot.j.read_jsonl(bot.j.trades_path, limit=1000)
+            self.assertTrue(any(t["reason"] == "broker" for t in closes))
+            self.assertAlmostEqual(bot.balance, 1000.0 + 10.0 * len([t for t in closes if t["reason"] == "broker"]), places=6)
+
+    def test_refused_order_leaves_no_position(self):
+        from smartbot.runner import LiveRunner
+        df = self._df()
+        with tempfile.TemporaryDirectory() as d:
+            bot = SmartBot(Journal(d), start_balance=1000.0)
+            bot.spec = Spec(side=1, atoms=("above_ema200", "rsi_mid"), stop_atr=1.5, rr=2.0, max_bars=24)
+            runner = LiveRunner(bot, FakeLiveExecutor(accept=False), "XAUUSDm", lambda: df)
+            runner.tick()
+            self.assertIsNone(bot.pos)
+            self.assertEqual(bot.balance, 1000.0)
+
+
 if __name__ == "__main__":
     unittest.main()

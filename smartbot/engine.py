@@ -56,6 +56,8 @@ class SmartBot:
         self.last_close = st.get("last_close")
         self.hist: list = []
         self.learn = True  # يُعطَّل في اختبارات المطابقة فقط
+        self.external = False  # True في التنفيذ الحي: الوسيط يدير الخروج
+        self.on_entry = None   # دالة(pos) ترجع رقم التذكرة أو None، تُستدعى عند الدخول الحي
 
     # ---------- حفظ الحالة ----------
     def _save(self) -> None:
@@ -126,11 +128,22 @@ class SmartBot:
                     p.update(stop=p["entry"] + R, tgt=p["entry"] - p["rr"] * R)
                 self.last_open = {"at": ts, "side": "شراء" if p["side"] == 1 else "بيع",
                                   "price": p["entry"], "stop": p["stop"], "target": p["tgt"]}
-                events.append({"kind": "open", **self.last_open})
-                self.j.event("open", "فتح صفقة", self.last_open)
+                if self.external:
+                    ticket = self.on_entry(p) if self.on_entry else None
+                    if ticket is None:
+                        self.pos = None
+                        self.j.event("skip", "لم يُفتح المركز عند الوسيط", {"entry": p["entry"]})
+                    else:
+                        p["ticket"] = ticket
+                        events.append({"kind": "open", **self.last_open})
+                        self.j.event("open", "فتح صفقة", self.last_open)
+                else:
+                    events.append({"kind": "open", **self.last_open})
+                    self.j.event("open", "فتح صفقة", self.last_open)
             else:
                 p["k"] = k_i - p["e_i"]
-            closed = self._check_exit(ts, float(h), float(l), float(c), events)
+            if self.pos is not None and not self.external:
+                closed = self._check_exit(ts, float(h), float(l), float(c), events)
 
         if self.pos is None and not closed and self.spec is not None and self.balance > 0:
             ok, info = self._signal()
@@ -146,6 +159,31 @@ class SmartBot:
                 events.append({"kind": "signal", "at": ts, "spec": describe(self.spec)})
         self._save()
         return events
+
+    def external_close(self, ts, profit_usd: float, events: list | None = None) -> None:
+        """يُستدعى عندما يغلق الوسيط الصفقة (وقف أو هدف)، ويمرّر الربح الفعلي بالدولار."""
+        p = self.pos
+        if not p or p.get("pending") or "ticket" not in p:
+            return
+        events = events if events is not None else []
+        risk = p["risk_usd"] or 1e-9
+        r_net = profit_usd / risk  # الربح الفعلي من الوسيط يتضمن التكلفة، فلا نخصم COST_R مرة أخرى
+        self.balance += profit_usd
+        rec = {
+            "side": "شراء" if p["side"] == 1 else "بيع", "spec": describe(self.spec) or "",
+            "spec_key": Spec(**{**p["spec"], "atoms": tuple(p["atoms"])}).key,
+            "signal_ts": p["signal_ts"], "entry_ts": p["entry_ts"], "entry": p["entry"],
+            "exit_ts": ts, "exit": None, "reason": "broker",
+            "r_net": round(r_net, 4), "pnl_usd": round(profit_usd, 4),
+            "balance_after": round(self.balance, 2), "rsi": round(p["rsi"], 2), "bucket": p["bucket"],
+            "ticket": p.get("ticket"),
+        }
+        self.j.trade(rec)
+        self.last_close = rec
+        events.append({"kind": "close", **rec})
+        self.pos = None
+        self._learn(rec, events)
+        self._save()
 
     def _signal(self):
         df = self._frame(self.hist[-FEAT_TAIL:])

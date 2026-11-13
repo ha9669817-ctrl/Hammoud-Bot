@@ -2762,3 +2762,48 @@ if os.getenv("DISABLE_SCHEDULER") != "1":
     threading.Thread(target=_keepalive_loop, daemon=True).start()
     threading.Thread(target=_watchdog, daemon=True).start()
     threading.Thread(target=_market_loop, daemon=True).start()
+
+
+# البوت الذكي (smartbot): يعمل فقط عند SMARTBOT_ENABLE=1، وعلى الحساب التجريبي فقط (SMARTBOT_MODE=demo).
+# مغلق افتراضياً: لا يتغير أي سلوك حالي ما لم يُضبط المتغيران صراحة.
+SMARTBOT_ASSET = "XAUUSD"
+
+
+def _smartbot_loop():
+    from smartbot.engine import SmartBot
+    from smartbot.executor import TickerAllExecutor
+    from smartbot.journal import Journal
+    from smartbot.runner import LiveRunner
+
+    time.sleep(30)
+    try:
+        client = ta_client(store)
+        if client is None:
+            print("[smartbot] لا يوجد عميل TickerAll، لن يعمل البوت", flush=True)
+            return
+        executor = TickerAllExecutor(client, lots_for_risk)  # يرفض إلا إذا SMARTBOT_MODE=demo
+
+        def fetch():
+            df = ta_history(SMARTBOT_ASSET, "1h", 1200, client=client)
+            now = pd.Timestamp.now(tz="UTC")
+            df = df[df["close_time"] < now]  # الشموع المكتملة فقط
+            return df[["open_time", "open", "high", "low", "close"]].rename(columns={"open_time": "time"})
+
+        journal_dir = str(Path(DB_PATH).resolve().parent / "smartbot")
+        bot = SmartBot(Journal(journal_dir), start_balance=CONFIG["start_balance"])
+        runner = LiveRunner(bot, executor, ta_symbol(store, SMARTBOT_ASSET), fetch)
+        res = runner.start()
+        print(f"[smartbot] بدأ. بحث البداية: {'اعتُمدت استراتيجية' if res.get('accepted') else 'لا توجد استراتيجية مقبولة'}", flush=True)
+    except Exception as exc:
+        print(f"[smartbot] فشل التشغيل: {type(exc).__name__}: {exc}", flush=True)
+        return
+    while True:
+        try:
+            runner.tick()
+        except Exception as exc:
+            print(f"[smartbot] دورة فاشلة: {type(exc).__name__}: {exc}", flush=True)
+        time.sleep(60)
+
+
+if os.getenv("DISABLE_SCHEDULER") != "1" and os.getenv("SMARTBOT_ENABLE") == "1":
+    threading.Thread(target=_smartbot_loop, daemon=True).start()
