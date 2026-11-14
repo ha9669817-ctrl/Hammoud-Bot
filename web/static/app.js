@@ -208,14 +208,19 @@
   $("expXAU").addEventListener("click", () => exportCandles("XAUUSD"));
   $("expBTC").addEventListener("click", () => exportCandles("BTCUSDT"));
 
-  async function histStart(symbols, intervals) {
+  async function histStart() {
     const pwd = $("pw").value.trim();
     if (!pwd) { msg("أدخل كلمة مرور الإدارة أولاً", "err"); $("pw").focus(); return; }
+    const intervals = [...document.querySelectorAll('input[name="hTf"]:checked')].map(i => i.value);
+    if (!intervals.length) { msg("اختر فريماً واحداً على الأقل", "err"); return; }
+    const days = parseInt($("histDays").value, 10);
+    if (!(days >= 1 && days <= 400)) { msg("المدة يجب أن تكون بين 1 و 400 يوم", "err"); return; }
+    const symbols = $("histSyms").value;
     try {
       const r = await fetch("/api/history/start", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Admin-Password": pwd },
-        body: JSON.stringify({ symbols, intervals, days: 365 }),
+        body: JSON.stringify({ symbols, intervals, days }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || "فشل الطلب (" + r.status + ")");
@@ -257,8 +262,7 @@
     } catch (err) { msg(err.message, "err"); }
   }
 
-  $("histMain").addEventListener("click", () => histStart("assets", ["1h", "1d", "1w", "1mo"]));
-  $("histAll").addEventListener("click", () => histStart("all", ["1h", "1d", "1w", "1mo"]));
+  $("histStart").addEventListener("click", histStart);
   $("histZip").addEventListener("click", histZip);
   setInterval(histRefresh, 10000);
 

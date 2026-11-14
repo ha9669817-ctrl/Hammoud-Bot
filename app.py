@@ -1472,7 +1472,7 @@ def fmt(v) -> str:
 
 
 TA_CANDLE_TF = {"1m": "M1", "1h": "H1", "1d": "D1"}
-INTERVAL_SEC = {"1m": 60, "1h": 3600, "1d": 86400, "1w": 604800, "1mo": 2592000}
+INTERVAL_SEC = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1d": 86400, "1w": 604800, "1mo": 2592000}
 
 
 def _ts_any(value):
@@ -2560,7 +2560,7 @@ def candles_csv():
 
 # ---- سحب تاريخ الشموع في الخلفية (سنة كاملة، لكل الأزواج) ----
 HIST_DIR = Path(DB_PATH).resolve().parent / "history"
-HIST_TF = {"1h": "H1", "1d": "D1", "1w": "W1", "1mo": "MN1"}
+HIST_TF = {"5m": "M5", "15m": "M15", "1h": "H1", "1d": "D1", "1w": "W1", "1mo": "MN1"}
 HIST_CHUNK = 500            # عدد الشموع في الطلب الواحد
 HIST_LOCK = threading.Lock()
 HIST = {"running": False, "started": None, "finished": None, "jobs": {}}

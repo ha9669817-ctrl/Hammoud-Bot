@@ -89,11 +89,28 @@ footer{margin:24px 0 8px;text-align:center;font-size:13px;color:var(--muted)}
     <button id="expBTC">تصدير البيتكوين</button>
   </div>
 
-  <h2 style="margin-top:22px">سحب تاريخ الشموع (سنة)</h2>
-  <p class="hint">يعمل في الخلفية. يسحب الساعة واليومي والأسبوعي والشهري.</p>
-  <div class="btns" style="grid-template-columns:1fr">
-    <button id="histMain" class="on">سحب سنة: الذهب والبيتكوين (ساعة + يومي + أسبوعي + شهري)</button>
-    <button id="histAll">سحب سنة: كل الأزواج (ساعة + يومي + أسبوعي + شهري)</button>
+  <h2 style="margin-top:22px">سحب تاريخ الشموع</h2>
+  <p class="hint">يعمل في الخلفية. اختر الفريمات والمدة والرموز. الدقائق (5 و15) تنتج ملفات كبيرة، فاختر مدة أقصر إذا سحبت كل الأزواج.</p>
+  <div style="display:grid;gap:10px">
+    <div>
+      <div class="hint">الفريمات:</div>
+      <label><input type="checkbox" name="hTf" value="5m"> 5 دقائق</label>
+      <label><input type="checkbox" name="hTf" value="15m"> 15 دقيقة</label>
+      <label><input type="checkbox" name="hTf" value="1h" checked> ساعة</label>
+      <label><input type="checkbox" name="hTf" value="1d" checked> يومي</label>
+      <label><input type="checkbox" name="hTf" value="1w" checked> أسبوعي</label>
+      <label><input type="checkbox" name="hTf" value="1mo" checked> شهري</label>
+    </div>
+    <label>المدة بالأيام (1 إلى 400):
+      <input type="number" id="histDays" value="365" min="1" max="400">
+    </label>
+    <label>الرموز:
+      <select id="histSyms">
+        <option value="assets">الذهب والبيتكوين</option>
+        <option value="all">كل الأزواج</option>
+      </select>
+    </label>
+    <button id="histStart" class="on">بدء السحب</button>
     <button id="histZip">تحميل الملفات المسحوبة (ZIP)</button>
   </div>
   <pre id="histOut" class="hint" style="white-space:pre-wrap;margin-top:12px"></pre>
