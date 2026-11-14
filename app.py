@@ -2186,7 +2186,8 @@ def _build_state() -> dict:
             balance = float(snap["balance"])
             broker_equity = snap.get("equity")
             source = "tickerall"
-            if store.meta_get("ta_start") is None:
+            # الرصيد الابتدائي يجب أن يكون موجباً؛ صفر محفوظ سابقاً يُستبدل بالرصيد الحالي
+            if not (store.meta_get("ta_start") or 0) and balance > 0:
                 store.meta_set("ta_start", balance)
             start = float(store.meta_get("ta_start") or balance)
         else:
@@ -2210,7 +2211,7 @@ def _build_state() -> dict:
                    "evolve_every_hours": CONFIG["evolve_every_hours"]},
         "settings": _settings(),
         "account": {"balance": balance, "start": start, "source": source, "equity": broker_equity,
-                    "return_pct": round((balance / start - 1) * 100, 2),
+                    "return_pct": round((balance / start - 1) * 100, 2) if start else None,
                     "trades": len(closed),
                     "win_rate": round(100 * len(wins) / len(closed), 1) if closed else 0.0,
                     "profit_factor": round(gross_win / gross_loss, 2) if gross_loss > 0 else None},

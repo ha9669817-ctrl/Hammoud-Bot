@@ -758,6 +758,23 @@ def test_history_endpoints_require_password():
     assert c.get("/api/history/zip").status_code == 401
 
 
+def test_state_survives_zero_start_balance():
+    # regression: رصيد صفر محفوظ كبداية وكرصيد حالي كان يُسقط /api/state بـ ZeroDivisionError
+    A.store.set_mode("tickerall")
+    try:
+        A.store.meta_set("ta_start", 0.0)
+        A.store.meta_set("ta_snapshot", {"balance": 0.0})
+        st = A.app.test_client().get("/api/state")
+        assert st.status_code == 200, st.get_data(as_text=True)[:200]
+        assert st.get_json()["account"]["return_pct"] is None
+        # رصيد حالي موجب يصحح البداية الصفرية
+        A.store.meta_set("ta_snapshot", {"balance": 25.0})
+        acct = A.app.test_client().get("/api/state").get_json()["account"]
+        assert acct["start"] == 25.0 and acct["return_pct"] == 0.0
+    finally:
+        A.store.set_mode("paper")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:
