@@ -105,6 +105,59 @@ class TestLearning(unittest.TestCase):
             self.assertIn("شراء|50-70", bot.avoid)
 
 
+class TestFixedSpecs(unittest.TestCase):
+    """وضع القواعد الثابتة: تحليل فني مسجّل مسبقاً، بلا بحث عشوائي على البيانات."""
+
+    def _specs(self):
+        buy = Spec(side=1, atoms=("above_ema200", "trend_ema20_50", "pullback_ema50", "strong_candle"),
+                    stop_atr=1.5, rr=2.0, max_bars=48)
+        sell = Spec(side=-1, atoms=("above_ema200", "trend_ema20_50", "pullback_ema50", "strong_candle"),
+                     stop_atr=1.5, rr=2.0, max_bars=48)
+        return [buy, sell]
+
+    def test_bootstrap_skips_search_and_accepts_immediately(self):
+        with tempfile.TemporaryDirectory() as d:
+            bot = SmartBot(Journal(d), start_balance=1000.0, fixed_specs=self._specs())
+            res = bot.bootstrap(synthetic(50))  # بيانات قليلة جداً لأي بحث إحصائي عادي
+            self.assertTrue(res["accepted"])
+            self.assertIsNone(bot.spec)  # يُختار ديناميكياً عند إشارة فعلية، وليس عند البدء
+
+    def test_feed_trades_without_ever_calling_search(self):
+        # لو استدعى البحث لانهار الاختبار (بيانات قليلة جداً كي يقبلها build_strategy لنفسه)
+        with tempfile.TemporaryDirectory() as d:
+            bot = SmartBot(Journal(d), start_balance=1000.0, fixed_specs=self._specs())
+            bot.bootstrap(synthetic(300, seed=11))
+            for r in synthetic(300, seed=12).itertuples(index=False):
+                bot.feed(r.time, r.open, r.high, r.low, r.close)
+            # لا يُشترط فتح صفقة في هذه العينة، لكن لا خطأ، ولا تغيّر لقائمة fixed_specs
+            self.assertEqual(len(bot.fixed_specs), 2)
+
+    def test_retirement_does_not_search_and_stops_when_exhausted(self):
+        with tempfile.TemporaryDirectory() as d:
+            bot = SmartBot(Journal(d), start_balance=1000.0, fixed_specs=self._specs())
+            bot.hist = [(str(i), 100.0, 101.0, 99.0, 100.0) for i in range(10)]
+            buy, sell = bot.fixed_specs
+            bot.spec = buy
+            for _ in range(10):
+                bot.j.trade({"spec_key": buy.key, "r_net": -1.0, "side": "شراء", "bucket": "50-70"})
+            bot._learn({"r_net": -1.0}, [])
+            self.assertIn(buy.key, bot.retired)
+            self.assertIsNone(bot.spec)
+            # لم يُستبدل بقاعدة جديدة؛ ما زال البيع هو الوحيد المتبقي من نفس المجموعة الثابتة
+            remaining = [s for s in bot.fixed_specs if s.key not in bot.retired]
+            self.assertEqual(remaining, [sell])
+            st = bot.status()
+            self.assertIn("1 من 2", st["state"])
+            # أوقف الثانية أيضاً: يتوقف نهائياً بلا أي بديل
+            bot.spec = sell
+            for _ in range(10):
+                bot.j.trade({"spec_key": sell.key, "r_net": -1.0, "side": "بيع", "bucket": "50-70"})
+            bot._learn({"r_net": -1.0}, [])
+            self.assertIn(sell.key, bot.retired)
+            st2 = bot.status()
+            self.assertIn("متوقف نهائياً", st2["state"])
+
+
 class FakeClient:
     def __init__(self, positions=None, profit=None):
         self._pos = positions or []

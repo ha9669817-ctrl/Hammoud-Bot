@@ -43,7 +43,12 @@ def describe(spec: Spec | None) -> str | None:
 
 
 class SmartBot:
-    def __init__(self, journal: Journal | None = None, start_balance: float = 1000.0):
+    def __init__(self, journal: Journal | None = None, start_balance: float = 1000.0,
+                 fixed_specs: list[Spec] | None = None):
+        """fixed_specs: إن مُرِّرت، يتجاوز البوت البحث الإحصائي بالكامل ويتداول فقط بهذه القواعد
+        المسجّلة مسبقاً (تحليل فني معروف، وليست نتيجة بحث على البيانات). لا يُضاف أي قاعدة جديدة
+        تلقائياً أبداً في هذا الوضع: إذا توقفت كل القواعد بعد خسارة متكررة يتوقف البوت نهائياً
+        بدل أن "يخمّن" بديلاً، تحقيقاً لمبدأ عدم الدخول العشوائي."""
         self.j = journal or Journal()
         st = self.j.load_state()
         self.start_balance = float(st.get("start_balance", start_balance))
@@ -58,6 +63,7 @@ class SmartBot:
         self.learn = True  # يُعطَّل في اختبارات المطابقة فقط
         self.external = False  # True في التنفيذ الحي: الوسيط يدير الخروج
         self.on_entry = None   # دالة(pos) ترجع رقم التذكرة أو None، تُستدعى عند الدخول الحي
+        self.fixed_specs = list(fixed_specs) if fixed_specs else None
 
     # ---------- حفظ الحالة ----------
     def _save(self) -> None:
@@ -74,8 +80,15 @@ class SmartBot:
 
     # ---------- بداية التشغيل ----------
     def bootstrap(self, df: pd.DataFrame) -> dict:
-        """يبحث عن استراتيجية على تاريخ معروف، ويعتمدها إن تحققت شروط القبول."""
+        """يبحث عن استراتيجية على تاريخ معروف، ويعتمدها إن تحققت شروط القبول.
+        في وضع القواعد الثابتة (fixed_specs) لا بحث إطلاقاً: القواعد مسجّلة مسبقاً وثابتة."""
         self.hist = [tuple(r) for r in df[["time", "open", "high", "low", "close"]].itertuples(index=False)]
+        if self.fixed_specs is not None:
+            self.spec = None  # يُختار ديناميكياً من المجموعة عند إطلاق إشارة
+            self.j.event("research", "وضع قواعد ثابتة مسجّلة مسبقاً: لا بحث عشوائي على البيانات",
+                         {"rules": [describe(s) for s in self.fixed_specs]})
+            self._save()
+            return {"accepted": True, "fixed": True}
         return self._research(reason_prefix="بداية التشغيل")
 
     def _research(self, reason_prefix: str = "إعادة بحث") -> dict:
@@ -145,7 +158,10 @@ class SmartBot:
             if self.pos is not None and not self.external:
                 closed = self._check_exit(ts, float(h), float(l), float(c), events)
 
-        if self.pos is None and not closed and self.spec is not None and self.balance > 0:
+        has_candidate = self.spec is not None or (
+            self.fixed_specs is not None and any(s.key not in self.retired for s in self.fixed_specs)
+        )
+        if self.pos is None and not closed and has_candidate and self.balance > 0:
             ok, info = self._signal()
             if ok:
                 self.pos = {
@@ -188,17 +204,25 @@ class SmartBot:
     def _signal(self):
         df = self._frame(self.hist[-FEAT_TAIL:])
         f = build(df)
-        m = signal_mask(atom_masks(f), self.spec)
-        if not m[-1] or np.isnan(f["atr14"][-1]) or f["atr14"][-1] <= 0:
+        if np.isnan(f["atr14"][-1]) or f["atr14"][-1] <= 0:
             return False, None
+        if self.fixed_specs is not None:
+            candidates = [s for s in self.fixed_specs if s.key not in self.retired]
+        else:
+            candidates = [self.spec] if self.spec is not None else []
         rsi = float(f["rsi14"][-1])
         bucket = rsi_bucket(rsi)
-        side = "شراء" if self.spec.side == 1 else "بيع"
-        key = f"{side}|{bucket}"
-        if key in self.avoid:
-            self.j.event("skip", f"تجاهلت إشارة {side} لأن RSI في منطقة مرفوضة ({bucket})", {"rsi": rsi})
-            return False, None
-        return True, {"atr": float(f["atr14"][-1]), "rsi": rsi, "bucket": bucket}
+        for cand in candidates:
+            m = signal_mask(atom_masks(f), cand)
+            if not m[-1]:
+                continue
+            side = "شراء" if cand.side == 1 else "بيع"
+            key = f"{side}|{bucket}"
+            if key in self.avoid:
+                continue
+            self.spec = cand  # القاعدة التي أطلقت الإشارة الآن (قد تختلف عن سابقتها في وضع القواعد الثابتة)
+            return True, {"atr": float(f["atr14"][-1]), "rsi": rsi, "bucket": bucket}
+        return False, None
 
     def _check_exit(self, ts, h, l, c, events) -> bool:
         p = self.pos
@@ -251,7 +275,16 @@ class SmartBot:
                 self.j.lesson(msg)
                 events.append({"kind": "lesson", "msg": msg})
                 self.spec = None
-                self._research(reason_prefix="بعد إيقاف الاستراتيجية")
+                if self.fixed_specs is None:
+                    self._research(reason_prefix="بعد إيقاف الاستراتيجية")
+                else:
+                    remaining = [s for s in self.fixed_specs if s.key not in self.retired]
+                    if remaining:
+                        msg2 = f"أُوقفت إحدى القواعد الثابتة؛ تبقّى {len(remaining)} قاعدة نشطة (بلا بحث عشوائي جديد)"
+                    else:
+                        msg2 = "أُوقفت كل القواعد الثابتة المسجّلة مسبقاً؛ البوت متوقف تماماً حتى تدخّل بشري"
+                    self.j.lesson(msg2)
+                    events.append({"kind": "lesson", "msg": msg2})
         recent = trades[-60:]
         groups: dict = {}
         for t in recent:
@@ -273,15 +306,27 @@ class SmartBot:
         trades = self.j.read_jsonl(self.j.trades_path, limit=5000)
         wins = sum(1 for t in trades if t["r_net"] > 0)
         losses = len(trades) - wins
-        if self.spec is None:
+        remaining_fixed = [s for s in self.fixed_specs if s.key not in self.retired] if self.fixed_specs else None
+        if remaining_fixed is not None:
+            if not remaining_fixed:
+                state = "متوقف نهائياً: كل القواعد الثابتة توقفت بعد خسارة متكررة (لا بحث بديل)"
+            elif self.pos:
+                state = "صفقة مفتوحة"
+            else:
+                state = f"يراقب قاعدة ثابتة مسجّلة مسبقاً ({len(remaining_fixed)} من {len(self.fixed_specs)} نشطة)"
+            strategy_desc = " / ".join(describe(s) for s in remaining_fixed) if remaining_fixed else None
+        elif self.spec is None:
             state = "متوقف: لا توجد استراتيجية معتمدة الآن"
+            strategy_desc = None
         elif self.pos:
             state = "صفقة مفتوحة"
+            strategy_desc = describe(self.spec)
         else:
             state = "يراقب السوق"
+            strategy_desc = describe(self.spec)
         return {
             "state": state,
-            "strategy": describe(self.spec),
+            "strategy": strategy_desc,
             "balance": round(self.balance, 2),
             "start_balance": round(self.start_balance, 2),
             "total_profit": round(self.balance - self.start_balance, 2),

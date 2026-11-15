@@ -2797,6 +2797,16 @@ def smartbot_status() -> dict:
     return out
 
 
+def _trend_pullback_rules():
+    """تحليل فني تقليدي معروف (اتجاه + ارتداد)، مسجّل هنا قبل أي اختبار ولا يُضبط حسب النتائج:
+    اتجاه صاعد (السعر فوق EMA200 وEMA20 فوق EMA50) + ارتداد للمس EMA50 + شمعة تأكيد قوية، والعكس للبيع.
+    وقف 1.5×ATR وهدف 2R لكلا الاتجاهين، بلا استثناء أو تمييز بين الذهب والبيتكوين."""
+    from smartbot.strategy import Spec
+    atoms = ("above_ema200", "trend_ema20_50", "pullback_ema50", "strong_candle")
+    return [Spec(side=1, atoms=atoms, stop_atr=1.5, rr=2.0, max_bars=48),
+            Spec(side=-1, atoms=atoms, stop_atr=1.5, rr=2.0, max_bars=48)]
+
+
 def _smartbot_loop():
     from smartbot.engine import SmartBot
     from smartbot.executor import TickerAllExecutor
@@ -2833,7 +2843,8 @@ def _smartbot_loop():
     for asset in SMARTBOT_ASSETS:
         try:
             journal_dir = str(Path(DB_PATH).resolve().parent / "smartbot" / asset.lower())
-            bot = SmartBot(Journal(journal_dir), start_balance=CONFIG["start_balance"])
+            bot = SmartBot(Journal(journal_dir), start_balance=CONFIG["start_balance"],
+                            fixed_specs=_trend_pullback_rules())
             runner = LiveRunner(bot, executor, ta_symbol(store, asset), make_fetch(asset),
                                  comment=f"smartbot-{asset}", is_enabled=smartbot_is_on)
             res = runner.start()
