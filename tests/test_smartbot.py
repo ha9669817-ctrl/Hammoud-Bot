@@ -63,7 +63,7 @@ class TestEngineMatchesSimulate(unittest.TestCase):
         spec = Spec(side=1, atoms=("above_ema200", "rsi_mid"), stop_atr=1.5, rr=2.0, max_bars=24)
         offline = simulate(f, signal_mask(atom_masks(f), spec), spec)
         with tempfile.TemporaryDirectory() as d:
-            bot = SmartBot(Journal(d), start_balance=1000.0)
+            bot = SmartBot(Journal(d), start_balance=1000.0, fixed_specs=[spec])
             bot.spec = spec
             bot.learn = False  # نقارن التنفيذ وحده، بلا إيقاف أو تجنب
             for r in df.itertuples(index=False):
@@ -255,8 +255,9 @@ class TestLiveRunner(unittest.TestCase):
         from smartbot.runner import LiveRunner
         df = self._df()
         with tempfile.TemporaryDirectory() as d:
-            bot = SmartBot(Journal(d), start_balance=1000.0)
-            bot.spec = Spec(side=1, atoms=("above_ema200", "rsi_mid"), stop_atr=1.5, rr=2.0, max_bars=24)
+            spec = Spec(side=1, atoms=("above_ema200", "rsi_mid"), stop_atr=1.5, rr=2.0, max_bars=24)
+            bot = SmartBot(Journal(d), start_balance=1000.0, fixed_specs=[spec])
+            bot.spec = spec
             ex = FakeLiveExecutor(profit=10.0)
             runner = LiveRunner(bot, ex, "XAUUSDm", lambda: df)
             runner.tick()
@@ -274,8 +275,9 @@ class TestLiveRunner(unittest.TestCase):
         from smartbot.runner import LiveRunner
         df = self._df()
         with tempfile.TemporaryDirectory() as d:
-            bot = SmartBot(Journal(d), start_balance=1000.0)
-            bot.spec = Spec(side=1, atoms=("above_ema200", "rsi_mid"), stop_atr=1.5, rr=2.0, max_bars=24)
+            spec = Spec(side=1, atoms=("above_ema200", "rsi_mid"), stop_atr=1.5, rr=2.0, max_bars=24)
+            bot = SmartBot(Journal(d), start_balance=1000.0, fixed_specs=[spec])
+            bot.spec = spec
             runner = LiveRunner(bot, FakeLiveExecutor(accept=False), "XAUUSDm", lambda: df)
             runner.tick()
             self.assertIsNone(bot.pos)
@@ -285,8 +287,9 @@ class TestLiveRunner(unittest.TestCase):
         from smartbot.runner import LiveRunner
         df = self._df()
         with tempfile.TemporaryDirectory() as d:
-            bot = SmartBot(Journal(d), start_balance=1000.0)
-            bot.spec = Spec(side=1, atoms=("above_ema200", "rsi_mid"), stop_atr=1.5, rr=2.0, max_bars=24)
+            spec = Spec(side=1, atoms=("above_ema200", "rsi_mid"), stop_atr=1.5, rr=2.0, max_bars=24)
+            bot = SmartBot(Journal(d), start_balance=1000.0, fixed_specs=[spec])
+            bot.spec = spec
             ex = FakeLiveExecutor(profit=10.0)
             runner = LiveRunner(bot, ex, "XAUUSDm", lambda: df, is_enabled=lambda: False)
             runner.tick()

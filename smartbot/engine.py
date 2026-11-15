@@ -12,7 +12,6 @@ import pandas as pd
 
 from .features import build, atom_masks
 from .journal import Journal
-from .search import build_strategy
 from .strategy import COST_R, Spec, signal_mask
 
 RISK_PCT = 1.0
@@ -21,7 +20,6 @@ FEAT_TAIL = 1000
 RETIRE_MIN_TRADES = 10
 AVOID_MIN = 8
 AVOID_WIN = 25.0
-MIN_BARS_TO_RESEARCH = 600
 
 
 def rsi_bucket(r: float) -> str:
@@ -80,40 +78,15 @@ class SmartBot:
 
     # ---------- بداية التشغيل ----------
     def bootstrap(self, df: pd.DataFrame) -> dict:
-        """يبحث عن استراتيجية على تاريخ معروف، ويعتمدها إن تحققت شروط القبول.
-        في وضع القواعد الثابتة (fixed_specs) لا بحث إطلاقاً: القواعد مسجّلة مسبقاً وثابتة."""
+        """لا بحث إحصائي إطلاقاً: القواعد (fixed_specs) تحليل فني مسجَّل مسبقاً وثابت،
+        يُطبَّق كما هو بدل أي بحث أو اختيار آلي بين مئات الاحتمالات."""
         self.hist = [tuple(r) for r in df[["time", "open", "high", "low", "close"]].itertuples(index=False)]
-        if self.fixed_specs is not None:
-            self.spec = None  # يُختار ديناميكياً من المجموعة عند إطلاق إشارة
-            self.j.event("research", "وضع قواعد ثابتة مسجّلة مسبقاً: لا بحث عشوائي على البيانات",
-                         {"rules": [describe(s) for s in self.fixed_specs]})
-            self._save()
-            return {"accepted": True, "fixed": True}
-        return self._research(reason_prefix="بداية التشغيل")
-
-    def _research(self, reason_prefix: str = "إعادة بحث") -> dict:
-        n = len(self.hist)
-        if n < MIN_BARS_TO_RESEARCH:
-            self.spec = None
-            self.j.event("research", f"{reason_prefix}: بيانات غير كافية ({n} شمعة)")
-            self._save()
-            return {"accepted": False}
-        df = self._frame(self.hist[-HIST_MAX:])
-        res = build_strategy(build(df), 0, len(df))
-        spec = res.get("spec")
-        if res["accepted"] and spec.key in self.retired:
-            res["accepted"] = False
-            res["reason"] = "أفضل مرشح سبق إيقافه"
-        if res["accepted"]:
-            self.spec = spec
-            self.j.event("research", f"{reason_prefix}: اعتمدت استراتيجية جديدة",
-                         {"spec": describe(spec), "train": res["train"], "validation": res["validation"]["stats"]})
-        else:
-            self.spec = None
-            self.j.event("research", f"{reason_prefix}: لا توجد استراتيجية مقبولة الآن ({res.get('reason', '')})",
-                         {"spec": spec.key if spec else None})
+        self.spec = None  # يُختار ديناميكياً من المجموعة عند إطلاق إشارة فعلية
+        rules = self.fixed_specs or []
+        self.j.event("research", "قواعد ثابتة مسجّلة مسبقاً: لا بحث على البيانات",
+                     {"rules": [describe(s) for s in rules]})
         self._save()
-        return res
+        return {"accepted": bool(rules)}
 
     @staticmethod
     def _frame(rows: list) -> pd.DataFrame:
@@ -158,9 +131,7 @@ class SmartBot:
             if self.pos is not None and not self.external:
                 closed = self._check_exit(ts, float(h), float(l), float(c), events)
 
-        has_candidate = self.spec is not None or (
-            self.fixed_specs is not None and any(s.key not in self.retired for s in self.fixed_specs)
-        )
+        has_candidate = any(s.key not in self.retired for s in (self.fixed_specs or []))
         if self.pos is None and not closed and has_candidate and self.balance > 0:
             ok, info = self._signal()
             if ok:
@@ -206,10 +177,7 @@ class SmartBot:
         f = build(df)
         if np.isnan(f["atr14"][-1]) or f["atr14"][-1] <= 0:
             return False, None
-        if self.fixed_specs is not None:
-            candidates = [s for s in self.fixed_specs if s.key not in self.retired]
-        else:
-            candidates = [self.spec] if self.spec is not None else []
+        candidates = [s for s in (self.fixed_specs or []) if s.key not in self.retired]
         rsi = float(f["rsi14"][-1])
         bucket = rsi_bucket(rsi)
         for cand in candidates:
@@ -275,16 +243,14 @@ class SmartBot:
                 self.j.lesson(msg)
                 events.append({"kind": "lesson", "msg": msg})
                 self.spec = None
-                if self.fixed_specs is None:
-                    self._research(reason_prefix="بعد إيقاف الاستراتيجية")
+                # لا بحث بديل أبداً: إما قاعدة متبقية من المجموعة الثابتة، أو توقف تام.
+                remaining = [s for s in (self.fixed_specs or []) if s.key not in self.retired]
+                if remaining:
+                    msg2 = f"أُوقفت إحدى القواعد الثابتة؛ تبقّى {len(remaining)} قاعدة نشطة (بلا بحث عشوائي جديد)"
                 else:
-                    remaining = [s for s in self.fixed_specs if s.key not in self.retired]
-                    if remaining:
-                        msg2 = f"أُوقفت إحدى القواعد الثابتة؛ تبقّى {len(remaining)} قاعدة نشطة (بلا بحث عشوائي جديد)"
-                    else:
-                        msg2 = "أُوقفت كل القواعد الثابتة المسجّلة مسبقاً؛ البوت متوقف تماماً حتى تدخّل بشري"
-                    self.j.lesson(msg2)
-                    events.append({"kind": "lesson", "msg": msg2})
+                    msg2 = "أُوقفت كل القواعد الثابتة المسجّلة مسبقاً؛ البوت متوقف تماماً حتى تدخّل بشري"
+                self.j.lesson(msg2)
+                events.append({"kind": "lesson", "msg": msg2})
         recent = trades[-60:]
         groups: dict = {}
         for t in recent:
