@@ -10,17 +10,24 @@ from .engine import SmartBot
 
 
 class LiveRunner:
-    def __init__(self, bot: SmartBot, executor, symbol: str, fetch_fn, comment: str = "smartbot"):
+    def __init__(self, bot: SmartBot, executor, symbol: str, fetch_fn, comment: str = "smartbot",
+                 is_enabled=None):
         self.bot = bot
         self.executor = executor
         self.symbol = symbol
         self.fetch_fn = fetch_fn
         self.comment = comment
         self.last_ts = None
+        # دالة تُفحص عند كل إشارة؛ تتيح تفعيل/إيقاف فتح الصفقات من لوحة التحكم دون المساس
+        # بالمراقبة والبحث، اللذين يستمران دائماً. الافتراضي "دائماً مفعّل" يحافظ على السلوك القديم.
+        self.is_enabled = is_enabled or (lambda: True)
         self.bot.external = True
         self.bot.on_entry = self._on_entry
 
     def _on_entry(self, pos: dict):
+        if not self.is_enabled():
+            self.bot.j.event("skip", "البوت متوقف من لوحة التحكم، لن تُفتح الصفقة", {"symbol": self.symbol})
+            return None
         side = "buy" if pos["side"] == 1 else "sell"
         res = self.executor.open(self.symbol, side, pos["entry"], pos["stop"], pos["tgt"],
                                  pos["risk_usd"], self.comment)

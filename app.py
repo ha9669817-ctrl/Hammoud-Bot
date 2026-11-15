@@ -2775,9 +2775,26 @@ if os.getenv("DISABLE_SCHEDULER") != "1":
     threading.Thread(target=_market_loop, daemon=True).start()
 
 
-# البوت الذكي (smartbot): يعمل فقط عند SMARTBOT_ENABLE=1، وعلى الحساب التجريبي فقط (SMARTBOT_MODE=demo).
-# مغلق افتراضياً: لا يتغير أي سلوك حالي ما لم يُضبط المتغيران صراحة.
-SMARTBOT_ASSET = "XAUUSD"
+# البوت الذكي (smartbot): المراقبة والبحث يعملان دائماً (عند توفر عميل TickerAll)، لكن فتح
+# الصفقات الفعلي يبقى مغلقاً حتى يُفعَّل من لوحة التحكم (مفتاح "smartbot_on" في قاعدة البيانات)،
+# وحتى لو فُعِّل، المنفذ يرفض العمل إلا إذا كان SMARTBOT_MODE=demo في بيئة Render (حماية من الحساب الحقيقي).
+SMARTBOT_ASSETS = ["XAUUSD", "BTCUSDT"]
+SMARTBOT_RUNNERS: dict = {}   # asset -> LiveRunner، تُملأ بعد بدء الحلقة
+SMARTBOT_LOCK = threading.Lock()
+
+
+def smartbot_is_on() -> bool:
+    return bool(store.meta_get("smartbot_on"))
+
+
+def smartbot_status() -> dict:
+    with SMARTBOT_LOCK:
+        runners = dict(SMARTBOT_RUNNERS)
+    out = {"on": smartbot_is_on(), "mode_ready": os.getenv("SMARTBOT_MODE", "").lower() == "demo", "assets": {}}
+    for asset in SMARTBOT_ASSETS:
+        r = runners.get(asset)
+        out["assets"][asset] = r.bot.status() if r else {"state": "لم يبدأ بعد"}
+    return out
 
 
 def _smartbot_loop():
@@ -2787,34 +2804,73 @@ def _smartbot_loop():
     from smartbot.runner import LiveRunner
 
     time.sleep(30)
-    try:
-        client = ta_client(store)
-        if client is None:
-            print("[smartbot] لا يوجد عميل TickerAll، لن يعمل البوت", flush=True)
-            return
-        executor = TickerAllExecutor(client, lots_for_risk)  # يرفض إلا إذا SMARTBOT_MODE=demo
+    client = ta_client(store)
+    if client is None:
+        print("[smartbot] لا يوجد عميل TickerAll، لن يعمل البوت", flush=True)
+        return
+    class _InertExecutor:
+        """يُستخدم عند رفض المنفذ الحقيقي (SMARTBOT_MODE ليس demo)؛ يراقب فقط ولا يفتح صفقات أبداً."""
+        def open(self, *a, **k):
+            return {"opened": False, "reason": "SMARTBOT_MODE ليس demo؛ المراقبة فقط"}
 
+        def check_closed(self, *a, **k):
+            return False, None
+
+    try:
+        executor = TickerAllExecutor(client, lots_for_risk)  # يرفض إلا إذا SMARTBOT_MODE=demo
+    except Exception as exc:
+        print(f"[smartbot] المنفذ مرفوض: {type(exc).__name__}: {exc} — المراقبة فقط بلا تنفيذ", flush=True)
+        executor = _InertExecutor()
+
+    def make_fetch(asset):
         def fetch():
-            df = ta_history(SMARTBOT_ASSET, "1h", 1200, client=client)
+            df = ta_history(asset, "1h", 1200, client=client)
             now = pd.Timestamp.now(tz="UTC")
             df = df[df["close_time"] < now]  # الشموع المكتملة فقط
             return df[["open_time", "open", "high", "low", "close"]].rename(columns={"open_time": "time"})
+        return fetch
 
-        journal_dir = str(Path(DB_PATH).resolve().parent / "smartbot")
-        bot = SmartBot(Journal(journal_dir), start_balance=CONFIG["start_balance"])
-        runner = LiveRunner(bot, executor, ta_symbol(store, SMARTBOT_ASSET), fetch)
-        res = runner.start()
-        print(f"[smartbot] بدأ. بحث البداية: {'اعتُمدت استراتيجية' if res.get('accepted') else 'لا توجد استراتيجية مقبولة'}", flush=True)
-    except Exception as exc:
-        print(f"[smartbot] فشل التشغيل: {type(exc).__name__}: {exc}", flush=True)
-        return
-    while True:
+    for asset in SMARTBOT_ASSETS:
         try:
-            runner.tick()
+            journal_dir = str(Path(DB_PATH).resolve().parent / "smartbot" / asset.lower())
+            bot = SmartBot(Journal(journal_dir), start_balance=CONFIG["start_balance"])
+            runner = LiveRunner(bot, executor, ta_symbol(store, asset), make_fetch(asset),
+                                 comment=f"smartbot-{asset}", is_enabled=smartbot_is_on)
+            res = runner.start()
+            with SMARTBOT_LOCK:
+                SMARTBOT_RUNNERS[asset] = runner
+            print(f"[smartbot] {asset}: بدأ. {'اعتُمدت استراتيجية' if res.get('accepted') else 'لا توجد استراتيجية مقبولة بعد'}",
+                  flush=True)
         except Exception as exc:
-            print(f"[smartbot] دورة فاشلة: {type(exc).__name__}: {exc}", flush=True)
+            print(f"[smartbot] {asset}: فشل البدء: {type(exc).__name__}: {exc}", flush=True)
+    while True:
+        with SMARTBOT_LOCK:
+            runners = dict(SMARTBOT_RUNNERS)
+        for asset, runner in runners.items():
+            try:
+                runner.tick()
+            except Exception as exc:
+                print(f"[smartbot] {asset}: دورة فاشلة: {type(exc).__name__}: {exc}", flush=True)
         time.sleep(60)
 
 
-if os.getenv("DISABLE_SCHEDULER") != "1" and os.getenv("SMARTBOT_ENABLE") == "1":
+@app.get("/api/smartbot/status")
+def smartbot_status_route():
+    return jsonify(smartbot_status())
+
+
+@app.post("/api/smartbot/toggle")
+def smartbot_toggle():
+    if not _authorized():
+        return _deny()
+    body = request.get_json(silent=True) or {}
+    on = bool(body.get("on"))
+    if on and os.getenv("SMARTBOT_MODE", "").lower() != "demo":
+        return jsonify({"error": "SMARTBOT_MODE ليس demo في إعدادات الخادم؛ لن تُفتح صفقات حقيقية حتى يُضبط"}), 400
+    store.meta_set("smartbot_on", on)
+    log_event("info", f"البوت الذكي: {'تفعيل فتح الصفقات' if on else 'إيقاف فتح الصفقات'} (المراقبة تستمر دائماً)")
+    return jsonify({"ok": True, "on": on})
+
+
+if os.getenv("DISABLE_SCHEDULER") != "1":
     threading.Thread(target=_smartbot_loop, daemon=True).start()

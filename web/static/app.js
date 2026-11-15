@@ -263,6 +263,58 @@
   }
 
   $("histStart").addEventListener("click", histStart);
+
+  async function smartbotRefresh() {
+    try {
+      const r = await fetch("/api/smartbot/status", { cache: "no-store" });
+      if (!r.ok) return;
+      const s = await r.json();
+      const ready = $("smartbotReady");
+      if (!s.mode_ready) {
+        ready.className = "link bad";
+        ready.textContent = "الخادم غير مهيّأ لحساب تجريبي (SMARTBOT_MODE). البوت يراقب فقط ولن يفتح أي صفقة.";
+      } else if (s.on) {
+        ready.className = "link ok";
+        ready.textContent = "فتح الصفقات مفعّل. سيتداول فور إيجاد استراتيجية مقبولة.";
+      } else {
+        ready.className = "link warn";
+        ready.textContent = "فتح الصفقات متوقف الآن. البوت يراقب ويبحث، لكن لن يفتح أي صفقة حتى تضغط «تفعيل».";
+      }
+      const list = $("smartbotList");
+      list.innerHTML = "";
+      for (const [asset, st] of Object.entries(s.assets || {})) {
+        const div = document.createElement("div");
+        div.className = "bot";
+        const profit = st.total_profit;
+        div.innerHTML =
+          `<div class="name">${ASSET_NAME[asset] || asset}</div>` +
+          `<div class="sub">${st.state || "—"}</div>` +
+          `<div class="sub">الاستراتيجية: ${st.strategy || "لا توجد"}</div>` +
+          `<div class="sub">صفقات: ${st.trades ?? 0} · نسبة ربح: ${st.win_rate ?? "—"}% · ` +
+          `الربح: <span class="${profit > 0 ? "up" : profit < 0 ? "down" : ""}">${profit != null ? signed(profit) : "—"}</span>$</div>`;
+        list.append(div);
+      }
+    } catch (e) {}
+  }
+  async function smartbotToggle(on) {
+    const pwv = $("pw").value.trim();
+    if (!pwv) { msg("أدخل كلمة مرور الإدارة أولاً", "err"); $("pw").focus(); return; }
+    try {
+      const r = await fetch("/api/smartbot/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Password": pwv },
+        body: JSON.stringify({ on }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || "فشل الطلب (" + r.status + ")");
+      msg(on ? "تم تفعيل فتح الصفقات" : "تم إيقاف فتح الصفقات", "ok");
+      smartbotRefresh();
+    } catch (err) { msg(err.message, "err"); }
+  }
+  $("smartbotOn").addEventListener("click", () => smartbotToggle(true));
+  $("smartbotOff").addEventListener("click", () => smartbotToggle(false));
+  smartbotRefresh();
+  setInterval(smartbotRefresh, 10000);
   $("histZip").addEventListener("click", histZip);
   setInterval(histRefresh, 10000);
 

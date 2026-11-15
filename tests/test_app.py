@@ -775,6 +775,40 @@ def test_state_survives_zero_start_balance():
         A.store.set_mode("paper")
 
 
+def test_smartbot_status_is_public_and_toggle_requires_password():
+    c = A.app.test_client()
+    st = c.get("/api/smartbot/status")
+    assert st.status_code == 200
+    body = st.get_json()
+    assert "on" in body and "assets" in body
+    assert c.post("/api/smartbot/toggle", json={"on": True}).status_code == 401
+
+
+def test_smartbot_toggle_refuses_without_demo_mode_env():
+    old = os.environ.pop("SMARTBOT_MODE", None)
+    try:
+        r = A.app.test_client().post("/api/smartbot/toggle", json={"on": True}, headers=PW)
+        assert r.status_code == 400, r.get_json()
+        assert A.store.meta_get("smartbot_on") is not True
+    finally:
+        if old is not None:
+            os.environ["SMARTBOT_MODE"] = old
+
+
+def test_smartbot_toggle_on_with_demo_mode_then_off():
+    os.environ["SMARTBOT_MODE"] = "demo"
+    try:
+        c = A.app.test_client()
+        r = c.post("/api/smartbot/toggle", json={"on": True}, headers=PW)
+        assert r.status_code == 200 and r.get_json()["on"] is True
+        assert A.smartbot_is_on() is True
+        r2 = c.post("/api/smartbot/toggle", json={"on": False}, headers=PW)
+        assert r2.status_code == 200 and r2.get_json()["on"] is False
+        assert A.smartbot_is_on() is False
+    finally:
+        os.environ.pop("SMARTBOT_MODE", None)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in tests:

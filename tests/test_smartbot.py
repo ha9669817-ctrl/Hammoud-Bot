@@ -228,6 +228,19 @@ class TestLiveRunner(unittest.TestCase):
             self.assertIsNone(bot.pos)
             self.assertEqual(bot.balance, 1000.0)
 
+    def test_disabled_toggle_skips_order_but_keeps_watching(self):
+        from smartbot.runner import LiveRunner
+        df = self._df()
+        with tempfile.TemporaryDirectory() as d:
+            bot = SmartBot(Journal(d), start_balance=1000.0)
+            bot.spec = Spec(side=1, atoms=("above_ema200", "rsi_mid"), stop_atr=1.5, rr=2.0, max_bars=24)
+            ex = FakeLiveExecutor(profit=10.0)
+            runner = LiveRunner(bot, ex, "XAUUSDm", lambda: df, is_enabled=lambda: False)
+            runner.tick()
+            self.assertEqual(ex.opened, [], "لا يجب إرسال أي أمر والبوت متوقف من اللوحة")
+            self.assertIsNone(bot.pos)
+            self.assertEqual(bot.balance, 1000.0)
+
 
 if __name__ == "__main__":
     unittest.main()
