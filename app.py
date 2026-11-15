@@ -2564,7 +2564,8 @@ HIST_DIR = Path(DB_PATH).resolve().parent / "history"
 HIST_TF = {"5m": "M5", "15m": "M15", "1h": "H1", "1d": "D1", "1w": "W1", "1mo": "MN1"}
 HIST_CHUNK = 500            # عدد الشموع في الطلب الواحد
 HIST_LOCK = threading.Lock()
-HIST = {"running": False, "started": None, "finished": None, "jobs": {}}
+HIST = {"running": False, "started": None, "finished": None, "jobs": {}, "gen": 0, "t0": 0.0}
+HIST_STALE_S = 1800  # سحب معلّق أكثر من 30 دقيقة يُعتبر متوقفاً ويُلغى عند بدء سحب جديد
 
 
 def _hist_name(symbol: str, interval: str) -> str:
@@ -2572,13 +2573,15 @@ def _hist_name(symbol: str, interval: str) -> str:
     return f"{safe}_{interval}.csv"
 
 
-def fetch_candles_span(client, symbol: str, interval: str, start, end, sink) -> int:
+def fetch_candles_span(client, symbol: str, interval: str, start, end, sink, alive=lambda: True) -> int:
     """يسحب شموع interval بين start و end على دفعات. إذا أعاد الوسيط أقل من المطلوب
     يكمل من آخر شمعة وصلت، فلا تضيع شموع بسبب سقف الخادم."""
     tf = HIST_TF[interval]
     step = pd.Timedelta(seconds=INTERVAL_SEC[interval])
     cur, seen, total = start, set(), 0
     while cur < end:
+        if not alive():
+            raise RuntimeError("أُلغي السحب لأن سحباً أحدث بدأ")
         win_end = min(end, cur + step * HIST_CHUNK)
         data = client._acct("GET", "/candles", params={
             "symbol": symbol, "timeframe": tf, "count": HIST_CHUNK,
@@ -2613,7 +2616,9 @@ def fetch_candles_span(client, symbol: str, interval: str, start, end, sink) -> 
     return total
 
 
-def run_history_job(symbols: list, intervals: list, days: int) -> None:
+def run_history_job(symbols: list, intervals: list, days: int, gen: int) -> None:
+    def alive():
+        return HIST["gen"] == gen
     client = ta_client(store)
     end = pd.Timestamp.now(tz="UTC").floor("min")
     start = end - pd.Timedelta(days=days)
@@ -2621,6 +2626,8 @@ def run_history_job(symbols: list, intervals: list, days: int) -> None:
     try:
         for sym in symbols:
             for itv in intervals:
+                if not alive():
+                    return
                 key = f"{sym}|{itv}"
                 with HIST_LOCK:
                     HIST["jobs"][key] = {"status": "running", "rows": 0}
@@ -2634,7 +2641,7 @@ def run_history_job(symbols: list, intervals: list, days: int) -> None:
                             for t, o, h, l, c, v in batch:
                                 writer.writerow([str(t), o, h, l, c, v])
 
-                        n = fetch_candles_span(client, sym, itv, start, end, sink)
+                        n = fetch_candles_span(client, sym, itv, start, end, sink, alive)
                     status = {"status": "done", "rows": n}
                 except Exception as exc:
                     status = {"status": "error", "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
@@ -2643,8 +2650,9 @@ def run_history_job(symbols: list, intervals: list, days: int) -> None:
                 log_event("info", f"سحب {sym} {itv}: {status.get('status')} {status.get('rows', '')}")
     finally:
         with HIST_LOCK:
-            HIST["running"] = False
-            HIST["finished"] = utc_now()
+            if alive():  # السحب الملغى لا يغيّر حالة السحب الأحدث
+                HIST["running"] = False
+                HIST["finished"] = utc_now()
 
 
 @app.post("/api/history/start")
@@ -2676,10 +2684,12 @@ def history_start():
     if not symbols:
         return jsonify({"error": "لا توجد رموز للسحب"}), 400
     with HIST_LOCK:
-        if HIST["running"]:
+        if HIST["running"] and time.time() - HIST.get("t0", 0.0) < HIST_STALE_S:
             return jsonify({"error": "يوجد سحب قيد التنفيذ، انتظر انتهاءه"}), 409
-        HIST.update({"running": True, "started": utc_now(), "finished": None, "jobs": {}})
-    threading.Thread(target=run_history_job, args=(symbols, intervals, days), daemon=True).start()
+        gen = HIST["gen"] + 1  # السحب السابق (إن كان معلّقاً) يتوقف عند أول فحص لاحق
+        HIST.update({"running": True, "started": utc_now(), "finished": None, "jobs": {},
+                     "gen": gen, "t0": time.time()})
+    threading.Thread(target=run_history_job, args=(symbols, intervals, days, gen), daemon=True).start()
     return jsonify({"ok": True, "note": f"بدأ السحب: {len(symbols)} رمز × {len(intervals)} فريم، {days} يوم"})
 
 
