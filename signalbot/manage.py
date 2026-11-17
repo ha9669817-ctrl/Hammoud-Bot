@@ -2,26 +2,34 @@
 
 الوقف لا يتحرك إلا لصالح الصفقة، ولا نغلق يدوياً: الإغلاق يتم بالوقف أو بالهدف النهائي فقط.
 """
-MAX_PENDING_DIST = 5.0     # دولار: أبعد من هذا عن المنطقة = تجاهل
 PENDING_HOURS = 6
 MAX_SL_DIST = 60.0
 LOCK_R = 0.10              # بعد TP1 يُنقل الوقف إلى الدخول + 0.1R (ربح صغير مضمون)
 FINAL_TP_INDEX = 2         # الهدف النهائي TP3
 
 
+MIN_SL_ROOM = 1.0          # أقل مسافة بين سعر الدخول والوقف كي نقبل الدخول الفوري
+
+
 def plan_entry(sig: dict, price: float):
-    """يعيد ("market", entry) أو ("pending", edge) أو ("skip", سبب)."""
+    """يعيد ("market", سعر) أو ("pending", حافة المنطقة) أو ("skip", سبب).
+
+    - داخل المنطقة، أو السعر أفضل منها (شراء تحتها / بيع فوقها): دخول فوري بسعر السوق.
+    - لم يصل السعر للمنطقة بعد (شراء فوقها / بيع تحتها): انتظار لمس حافتها مهما بعدت (أمر معلّق داخلي).
+    """
     side, lo, hi, sl = sig["side"], sig["lo"], sig["hi"], sig["sl"]
     if lo is None:
-        lo = hi = price
-    if lo <= price <= hi:
-        entry, kind = price, "market"
+        kind, entry = "market", price
+    elif lo <= price <= hi:
+        kind, entry = "market", price
+    elif side == "buy":
+        kind, entry = ("pending", hi) if price > hi else ("market", price)
     else:
-        dist = (lo - price) if price < lo else (price - hi)
-        if dist > MAX_PENDING_DIST:
-            return "skip", f"السعر بعيد عن المنطقة بمقدار {dist:.1f}$"
-        # السعر تحت المنطقة: شراء يحتاج Buy Stop؟ نقتصر على الحالة الطبيعية: ننتظر لمس الحافة بأمر معلّق
-        entry, kind = (lo if price < lo else hi), "pending"
+        kind, entry = ("pending", lo) if price < lo else ("market", price)
+    if kind == "market":
+        room = (entry - sl) if side == "buy" else (sl - entry)
+        if room < MIN_SL_ROOM:
+            return "skip", "السعر وصل الوقف أو تجاوزه فلا مجال للدخول"
     risk = abs(entry - sl)
     if risk <= 0 or risk > MAX_SL_DIST:
         return "skip", f"مسافة الوقف غير منطقية ({risk:.1f}$)"

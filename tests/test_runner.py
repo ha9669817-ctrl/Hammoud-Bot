@@ -13,7 +13,7 @@ class Ex:
 
     def recent_bars(self, since): return self.bars
     def open_tickets(self): return dict(self.live)
-    def size(self, d, p): return 0.01, 0.07, 1000.0
+    def size(self, d, p=None): return 0.01, 0.07, 1000.0
     def place(self, side, sl, tp, lots):
         self.n += 1; self.live[self.n] = "open"; return self.n
     def modify_sl(self, t, sl): self.mods.append((t, sl))

@@ -252,13 +252,21 @@ class SignalExecutor:
             self._symbol = next((s for s in GOLD_SYMBOLS if s in names), GOLD_SYMBOLS[0])
         return self._symbol
 
-    def size(self, sl_dist, risk_pct):
-        info = self.client.account_info()
-        balance = float(info.get("balance") or 0)
+    def size(self, sl_dist, _unused=None):
+        """لوت ثابت: الأصغر المسموح (أو SIGNALBOT_LOT إن ضُبط). لا حساب مخاطرة ولا تجاهل بسبب الحجم."""
         spec = self._spec(self.symbol)
-        lots = lots_for_risk(spec, balance * risk_pct / 100, sl_dist)
-        per_lot = _risk_per_lot(spec, sl_dist)
-        return lots, round(lots * per_lot, 2), balance
+        step = float(spec.get("volumeStep") or spec.get("volume_step") or 0.01)
+        vmin = float(spec.get("volumeMin") or spec.get("volume_min") or step)
+        try:
+            want = float(os.getenv("SIGNALBOT_LOT", "") or vmin)
+        except ValueError:
+            want = vmin
+        lots = max(vmin, round(round(want / step) * step, 8))
+        try:
+            balance = float(self.client.account_info().get("balance") or 0)
+        except Exception:
+            balance = 0.0
+        return lots, round(lots * _risk_per_lot(spec, sl_dist), 2), balance
 
     def place(self, side, sl, tp, lots):
         res = self.client.open_market(self.symbol, side, lots, sl, tp)

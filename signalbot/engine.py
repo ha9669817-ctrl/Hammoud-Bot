@@ -10,8 +10,6 @@ from pathlib import Path
 from . import manage
 from .parser import parse_signal
 
-RISK_PCT = 1.0            # المخاطرة المستهدفة من الرصيد لكل صفقة
-MAX_RISK_PCT = 10.0       # إن كان أصغر لوت يتجاوز هذا السقف تُتجاهل الإشارة
 MAX_OPEN = 1              # صفقة واحدة مفتوحة فقط؛ الباقي ينتظر في الطابور ولا يُهمل
 PAUSE_MIN_TRADES = 8      # أقل عدد صفقات مغلقة قبل الحكم على القناة
 PAUSE_WINDOW = 15         # نافذة آخر صفقات للحكم
@@ -133,9 +131,7 @@ class SignalBot:
         if kind == "skip":
             return skip(entry)
         sl_dist = abs(entry - sig["sl"])
-        lots, risk_usd, balance = self.ex.size(sl_dist, RISK_PCT)
-        if balance and risk_usd / balance * 100 > MAX_RISK_PCT:
-            return skip(f"أصغر لوت يخاطر بـ{risk_usd:.2f}$ ({risk_usd / balance * 100:.0f}% من الرصيد)")
+        lots, risk_usd, _balance = self.ex.size(sl_dist)   # لوت ثابت (الأصغر أو من SIGNALBOT_LOT): لا نتجاهل بسبب الحجم
         tp = manage.final_target(sig)
         base = {"channel": channel, "msg": msg_id, "side": sig["side"], "kind": kind,
                 "entry": entry, "sl0": sig["sl"], "stop": sig["sl"], "tps": sig["tps"], "tp": tp,

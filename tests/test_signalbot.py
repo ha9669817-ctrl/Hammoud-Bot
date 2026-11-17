@@ -35,11 +35,15 @@ def test_parse_rejects_noise_and_bad_geometry():
 
 
 def test_plan_entry():
-    sig = parse_signal(STRUCT)
-    assert manage.plan_entry(sig, 4040)[0] == "market"
-    assert manage.plan_entry(sig, 4050)[0] == "pending"
-    kind, why = manage.plan_entry(sig, 4100)
-    assert kind == "skip" and "بعيد" in why
+    sig = parse_signal(STRUCT)                       # شراء 4038-4048، وقف 4033
+    assert manage.plan_entry(sig, 4040)[0] == "market"       # داخل المنطقة
+    assert manage.plan_entry(sig, 4050) == ("pending", 4048)  # فوق المنطقة: ينتظر النزول إليها
+    assert manage.plan_entry(sig, 4100) == ("pending", 4048)  # حتى لو بعيد 50$ ينتظر
+    assert manage.plan_entry(sig, 4036)[0] == "market"       # تحت المنطقة = سعر أفضل: دخول فوري
+    assert manage.plan_entry(sig, 4033.5)[0] == "skip"       # لا مجال قبل الوقف
+    sell = parse_signal("XAUUSD SELL\nEntry: 3908 - 3918\nSL: 3923\nTP1: 3903")
+    assert manage.plan_entry(sell, 3905) == ("pending", 3908)  # تحت المنطقة: ينتظر الصعود
+    assert manage.plan_entry(sell, 3920)[0] == "market"        # فوق المنطقة = أفضل للبيع
 
 
 def test_trailing_never_moves_back_and_locks_profit():
@@ -61,8 +65,8 @@ class FakeEx:
         self.live, self.modified, self.profit, self.next = {}, [], None, 100
         self.fail_modify = False
 
-    def size(self, sl_dist, risk_pct):
-        lots = max(0.01, round(self.balance * risk_pct / 100 / (sl_dist * self.rpl), 2))
+    def size(self, sl_dist, _unused=None):
+        lots = 0.01
         return lots, lots * sl_dist * self.rpl, self.balance
 
     def place(self, side, sl, tp, lots):
@@ -107,12 +111,12 @@ def test_dedup_disabled_and_unknown_channel():
     assert "متوقف" in off.on_message("A", 3, STRUCT, 4040)
 
 
-def test_skip_far_price_and_tiny_account_risk():
+def test_far_price_waits_and_tiny_account_still_trades():
     bot, ex, _ = make()
-    assert "بعيد" in bot.on_message("A", 1, STRUCT, 4100)
+    assert bot.on_message("A", 1, STRUCT, 4100).startswith("pending")   # بعيد: أمر معلّق لا تجاهل
     small, ex2, _ = make(FakeEx(balance=20.0, risk_per_lot=100.0))
     r = small.on_message("A", 1, STRUCT, 4040)
-    assert "أصغر لوت" in r and not ex2.live
+    assert r.startswith("market") and len(ex2.live) == 1                # حساب 20$ يدخل بأصغر لوت
 
 
 def test_second_signal_is_queued_then_taken_when_free():
@@ -127,14 +131,14 @@ def test_second_signal_is_queued_then_taken_when_free():
     assert len(ex.live) == 1 and bot.j.read("trades.jsonl")
 
 
-def test_queued_signal_skipped_if_price_moved_away():
+def test_queued_signal_becomes_waiting_if_price_not_at_zone():
     bot, ex, _ = make()
     bot.on_message("A", 1, STRUCT, 4040)
     bot.on_message("A", 2, MASTER, 4421)
     ex.live.clear(); ex.profit = 3.0
-    bot.tick([], {}, 4600)                     # السعر بعيد عن منطقة الثانية
+    bot.tick([], {}, 4600)                     # السعر فوق منطقة الشراء: تنتظر الرجوع إليها
     assert not ex.live
-    assert any(e.get("event") == "skip" for e in bot.j.read("events.jsonl"))
+    assert any(t["state"] == "waiting" for t in bot.trades.values())
 
 
 def test_modify_failure_is_retried_next_tick():
