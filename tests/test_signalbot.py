@@ -235,3 +235,21 @@ def test_trail_not_set_on_wrong_side_of_price():
     bot.on_message("A", 1, "Gold buy now 4420-4422\nSL: 4408", 4421)
     bot.tick([(4436, 4420)], dict(ex.live), 4425)           # السعر رجع تحت الوقف المطلوب
     assert not ex.modified
+
+
+TS_IMG = "📉 XAUUSD — SELL 🔴\n\n🎯 Entry Zone: 3918 - 3908\n\n🟢 TP1: 3903\n🟢 TP2: 3900\n🟢 TP3: 3897\n🟢 TP4: 3894\n🟢 TP5: 3890\n\n🔴 Stop Loss (SL): 3923 🔴"
+
+
+def test_trade_sniper_sample_from_screenshot():
+    s = parse_signal(TS_IMG, "Trade Sniper")
+    assert (s["side"], s["lo"], s["hi"], s["sl"], len(s["tps"])) == ("sell", 3908, 3918, 3923, 5)
+
+
+def test_same_price_distances_for_every_lot_size():
+    f = manage.dollar_stop
+    for lots in (0.01, 0.02, 0.1, 0.5, 1.0):
+        upp = 100.0 * lots                                   # الذهب: 1.0 حركة = 100$ لكل لوت
+        assert f("buy", 4000, 4004.9, upp, lots) is None     # قبل 5 نقاط: لا شيء
+        assert abs(f("buy", 4000, 4005, upp, lots) - 4001) < 1e-9
+        assert abs(f("buy", 4000, 4012, upp, lots) - 4007) < 1e-9
+        assert abs(f("sell", 4000, 3985, upp, lots) - 3990) < 1e-9

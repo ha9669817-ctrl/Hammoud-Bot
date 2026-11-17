@@ -255,7 +255,7 @@ class SignalExecutor:
     def size(self, sl_dist, risk_pct):
         info = self.client.account_info()
         balance = float(info.get("balance") or 0)
-        spec = self.client.spec(self.symbol)
+        spec = self._spec(self.symbol)
         lots = lots_for_risk(spec, balance * risk_pct / 100, sl_dist)
         per_lot = _risk_per_lot(spec, sl_dist)
         return lots, round(lots * per_lot, 2), balance
@@ -271,7 +271,7 @@ class SignalExecutor:
         _modify_position(self.client, ticket, sl)
 
     def open_tickets(self):
-        return {p.get("ticket"): "open" for p in self.client.positions()
+        return {p.get("ticket"): "open" for p in self.positions_raw()
                 if p.get("symbol") == self.symbol and p.get("ticket") is not None}
 
     def closed_profit(self, ticket, since_iso):
@@ -279,10 +279,23 @@ class SignalExecutor:
 
     def usd_per_price(self, symbol, lots):
         """كم دولار يربح/يخسر المركز لكل 1.0 حركة في السعر."""
-        return _risk_per_lot(self.client.spec(symbol), 1.0) * float(lots)
+        return _risk_per_lot(self._spec(symbol), 1.0) * float(lots)
 
     def positions_raw(self):
-        return [p for p in self.client.positions() if isinstance(p, dict)]
+        """قائمة المراكز مع ذاكرة قصيرة (ثانيتان) حتى لا نكرر الطلب في الدورة الواحدة."""
+        c = getattr(self, "_pos_cache", None)
+        if c and time.time() - c[0] < 2.0:
+            return c[1]
+        data = [p for p in self.client.positions() if isinstance(p, dict)]
+        self._pos_cache = (time.time(), data)
+        return data
+
+    def _spec(self, symbol):
+        """مواصفات الرمز لا تتغير: تُطلب مرة واحدة لكل رمز."""
+        cache = self.__dict__.setdefault("_spec_cache", {})
+        if symbol not in cache:
+            cache[symbol] = self.client.spec(symbol)
+        return cache[symbol]
 
     def recent_bars(self, since_ts):
         return self.bars_for(self.symbol, since_ts)
@@ -290,9 +303,12 @@ class SignalExecutor:
     def bars_for(self, symbol, since_ts):
         """(high, low) لشموع الدقيقة منذ since_ts (ثوانٍ). يعيد (bars, آخر_وقت, آخر_إغلاق)."""
         now = datetime.now(timezone.utc)
+        # طلب صغير في الحالة العادية (فحص كل 3 ثوانٍ)، وأكبر فقط لتعويض فترة توقف
+        gap_min = int((now.timestamp() - since_ts) // 60) + 3 if since_ts else 120
+        minutes = max(5, min(120, gap_min))
         data = self.client._acct("GET", "/candles", params={
-            "symbol": symbol, "timeframe": "M1", "count": 120,
-            "from": (now - timedelta(minutes=120)).isoformat(), "to": now.isoformat()})
+            "symbol": symbol, "timeframe": "M1", "count": minutes,
+            "from": (now - timedelta(minutes=minutes)).isoformat(), "to": now.isoformat()})
         rows = []
         for c in _items(data, "candles", "data", "items", "bars"):
             if not isinstance(c, dict) or c.get("open") is None:
@@ -303,7 +319,8 @@ class SignalExecutor:
         rows.sort()
         if not rows:
             return [], since_ts, None
-        bars = [(h, l) for t, h, l, _ in rows if t > (since_ts or 0)]
+        # نعيد معالجة آخر شمعة (>=) لأن مداها يتسع وهي تتشكل؛ المعالجة آمنة عند التكرار
+        bars = [(h, l) for t, h, l, _ in rows if t >= (since_ts or 0)]
         return bars, rows[-1][0], rows[-1][3]
 
 

@@ -3,7 +3,8 @@ import queue
 import threading
 import time
 
-TICK_S = 20
+TICK_S = 3          # فحص كل 3 ثوانٍ
+ERROR_WAIT_S = 10   # بعد خطأ (مثلاً تقييد الوسيط للطلبات) ننتظر أطول
 
 
 class Runner:
@@ -53,10 +54,12 @@ class Runner:
     def _loop(self):
         self.state["alive"] = True
         while not self._stop.is_set():
+            wait = TICK_S
             try:
                 self.step()
                 self.state.update(last_tick=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), error=None)
             except Exception as e:
                 self.state["error"] = f"{type(e).__name__}: {str(e)[:160]}"
-            self._stop.wait(TICK_S)
+                wait = ERROR_WAIT_S
+            self._stop.wait(wait)
         self.state["alive"] = False
