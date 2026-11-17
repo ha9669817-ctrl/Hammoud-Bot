@@ -32,7 +32,7 @@ def test_health_and_index(client):
 def test_state_default_off(client):
     s = client.get("/api/state").json
     assert s["on"] is False and s["mode_ready"] is False
-    assert s["channels"] == ["Master blue", "Liquidity Trader"]
+    assert s["channels"] == ["Free Forex Signals", "Master blue", "Liquidity Trader", "Trade Sniper"]
 
 
 def test_admin_routes_need_password(client):

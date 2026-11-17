@@ -28,4 +28,4 @@ services:
       - key: TG_SESSION
         sync: false
       - key: TG_CHANNELS
-        value: "Master blue=-1003696057640,Liquidity Trader=-1003754368542"
+        value: "Free Forex Signals=-1001695031756,Master blue=-1003696057640,Liquidity Trader=-1003754368542,Trade Sniper=-1004312056334"

@@ -7,7 +7,8 @@ import asyncio
 import os
 import threading
 
-DEFAULT_CHANNELS = "Master blue=-1003696057640,Liquidity Trader=-1003754368542"
+DEFAULT_CHANNELS = ("Free Forex Signals=-1001695031756,Master blue=-1003696057640,"
+                    "Liquidity Trader=-1003754368542,Trade Sniper=-1004312056334")
 
 
 def parse_channels(raw: str) -> dict:

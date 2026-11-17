@@ -79,7 +79,7 @@ async function api(path,body){
   store.set("pw",$("pw").value);
   const r=await fetch(path,{method:body===undefined?"GET":"POST",headers:hdr(),body:body===undefined?undefined:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.status);return j}
-const ar={entry:"دخول",waiting:"انتظار منطقة",filled:"فُتحت من الانتظار",trail:"تحريك وقف",skip:"تجاهل",expired:"انتهت",channel_paused:"إيقاف قناة",error:"خطأ",decision:"قرار"};
+const ar={queued:"في الطابور",entry:"دخول",waiting:"انتظار منطقة",filled:"فُتحت من الانتظار",trail:"تحريك وقف",skip:"تجاهل",expired:"انتهت",channel_paused:"إيقاف قناة",error:"خطأ",decision:"قرار"};
 async function refresh(){
   try{
     const s=await (await fetch("/api/state")).json();
@@ -97,7 +97,7 @@ async function refresh(){
       const cell=el("span");cell.append(st);
       if(v.paused){const b=el("button","استئناف","sec");b.onclick=()=>api("/api/signalbot/resume",{channel:n}).then(refresh).catch(e=>$("msg").textContent=e.message);cell.append(" ",b)}
       return [n,v.trades,v.sum_r,v.avg_r==null?"—":v.avg_r,cell]}));
-    fill($("open"),s.open.map(t=>[t.channel,t.side==="buy"?"شراء":"بيع",t.state==="waiting"?"ينتظر "+t.entry:"دخول "+t.entry,"وقف "+t.stop,"مستوى "+t.level]));
+    fill($("open"),s.open.map(t=>t.state==="queued"?[t.channel,t.sig.side==="buy"?"شراء":"بيع","في الطابور","",""]:[t.channel,t.side==="buy"?"شراء":"بيع",t.state==="waiting"?"ينتظر "+t.entry:"دخول "+t.entry,"وقف "+t.stop,"مستوى "+t.level]));
     fill($("events"),s.events.slice(0,15).map(e=>[(e.at||"").replace("T"," ").slice(5,16),ar[e.event]||e.event,e.channel||"",e.reason||e.result||e.error||(e.new?"وقف→"+e.new:"")||""]));
     fill($("trades"),s.trades.map(t=>[(t.closed_at||"").slice(5,16),t.channel,t.side==="buy"?"شراء":"بيع",el("span",(t.profit>0?"+":"")+t.profit+"$ ("+t.r+"R)",t.profit>0?"ok":"bad")]));
     $("lessons").textContent=s.lessons||"لا دروس بعد";

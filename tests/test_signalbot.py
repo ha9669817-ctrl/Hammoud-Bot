@@ -115,11 +115,26 @@ def test_skip_far_price_and_tiny_account_risk():
     assert "أصغر لوت" in r and not ex2.live
 
 
-def test_max_open_limit():
+def test_second_signal_is_queued_then_taken_when_free():
+    bot, ex, _ = make()
+    bot.on_message("A", 1, STRUCT, 4040)
+    assert "الطابور" in bot.on_message("A", 2, MASTER, 4421)
+    assert len(ex.live) == 1
+    bot.tick([], dict(ex.live), 4421)          # ما زالت الأولى مفتوحة: الطابور ينتظر
+    assert len(ex.live) == 1
+    ex.live.clear(); ex.profit = 3.0
+    bot.tick([], {}, 4421)                     # أُغلقت الأولى ← تُفتح الثانية
+    assert len(ex.live) == 1 and bot.j.read("trades.jsonl")
+
+
+def test_queued_signal_skipped_if_price_moved_away():
     bot, ex, _ = make()
     bot.on_message("A", 1, STRUCT, 4040)
     bot.on_message("A", 2, MASTER, 4421)
-    assert "الحد الأقصى" in bot.on_message("A", 3, LIQ, 4140)
+    ex.live.clear(); ex.profit = 3.0
+    bot.tick([], {}, 4600)                     # السعر بعيد عن منطقة الثانية
+    assert not ex.live
+    assert any(e.get("event") == "skip" for e in bot.j.read("events.jsonl"))
 
 
 def test_modify_failure_is_retried_next_tick():

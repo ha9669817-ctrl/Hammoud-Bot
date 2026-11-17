@@ -45,7 +45,7 @@ class Runner:
             res = self.bot.on_message(ch, mid, text, self.price)
             self.bot.j.event("decision", channel=ch, msg=mid, result=res)
             live = self.ex.open_tickets()
-        self.bot.tick(bars, live)
+        self.bot.tick(bars, live, self.price)
 
     def _loop(self):
         self.state["alive"] = True
