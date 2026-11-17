@@ -61,3 +61,9 @@ def test_manual_message_dry_parse_and_validation(client):
 def test_history_start_requires_broker(client):
     r = client.post("/api/history/start", json={}, headers=H)
     assert r.status_code == 400
+
+
+def test_keepalive_noop_without_render_url(client, monkeypatch):
+    import app as appmod
+    monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
+    assert appmod.keepalive_once() is False

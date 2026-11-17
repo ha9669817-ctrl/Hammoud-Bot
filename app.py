@@ -101,7 +101,7 @@ def state():
         "channels": list(CHANNELS.values()),
         "account": _account() if os.getenv("DISABLE_SCHEDULER") != "1" else None,
         "runner": runner.state if runner else None,
-        "telegram": tg.state if tg else {"running": False, "error": "لم يبدأ"},
+        "telegram": tg.state if tg else {"running": False, "error": SB["error"] or "لم يبدأ بعد", "stage": "لم يبدأ"},
         "version": (os.getenv("RENDER_GIT_COMMIT") or "")[:7] or "محلي",
         "stats": bot.channel_stats() if bot else {},
         "open": list(bot.trades.values()) if bot else [],
@@ -203,6 +203,29 @@ def history_zip():
                     headers={"Content-Disposition": "attachment; filename=history.zip"})
 
 
+KEEPALIVE_S = 240   # أقل بكثير من 15 دقيقة (مهلة نوم Render المجاني)
+
+
+def keepalive_once() -> bool:
+    """يزور /health عبر العنوان العام ليُحسب ذلك طلباً واردًا فلا ينام الموقع."""
+    base = (os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
+    if not base:
+        return False
+    try:
+        import requests
+        requests.get(base + "/health", timeout=15)
+        return True
+    except Exception:
+        return False
+
+
+def _keepalive_loop():
+    while True:
+        time.sleep(KEEPALIVE_S)
+        keepalive_once()
+
+
 if os.getenv("DISABLE_SCHEDULER") != "1":
     # يُشغَّل بعد استيراد الوحدة حتى لا يؤخر استجابة /health
     threading.Thread(target=boot, daemon=True).start()
+    threading.Thread(target=_keepalive_loop, daemon=True).start()

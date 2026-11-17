@@ -88,8 +88,9 @@ async function refresh(){
     const on=$("onoff");on.textContent=s.on?"يعمل":"متوقف";on.className="big "+(s.on?"ok":"bad");
     const h=[];
     h.push(s.mode_ready?"وضع التجريبي: مفعّل":"SIGNALBOT_MODE ليس demo: التنفيذ مقفل");
-    h.push("تيليجرام: "+(s.telegram.running?"متصل":"غير متصل"+(s.telegram.error?" — "+s.telegram.error:"")));
-    h.push("المتابعة: "+(s.runner?(s.runner.error?"خطأ "+s.runner.error:"آخر دورة "+(s.runner.last_tick||"لم تبدأ")):"لم تبدأ"+(s.boot_error?" — "+s.boot_error:"")));
+    const tg=s.telegram||{};
+    h.push("تيليجرام: "+(tg.running?"متصل":"غير متصل")+" ("+(tg.stage||"")+")"+(tg.error?" — "+tg.error:"")+(tg.missing&&tg.missing.length?" — حسابك ليس مشتركاً في: "+tg.missing.join("، "):"")+(tg.running?" · رسائل وصلت: "+(tg.received||0):""));
+    h.push("المتابعة: "+(s.runner?(s.runner.error?"خطأ "+s.runner.error:(s.runner.last_tick?"تعمل، آخر دورة "+s.runner.last_tick:"بدأت وتنتظر أول دورة")):"لم تبدأ"+(s.boot_error?" — "+s.boot_error:"")));
     $("health").textContent=h.join(" · ");
     const ch=$("mch");if(!ch.options.length)s.channels.forEach(c=>ch.append(new Option(c,c)));
     fill($("stats"),Object.entries(s.stats).map(([n,v])=>{
