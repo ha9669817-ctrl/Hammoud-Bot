@@ -11,7 +11,7 @@ FINAL_TP_INDEX = 2         # الهدف النهائي TP3
 MIN_SL_ROOM = 1.0          # أقل مسافة بين سعر الدخول والوقف كي نقبل الدخول الفوري
 
 
-def plan_entry(sig: dict, price: float):
+def plan_entry(sig: dict, price: float, chase: bool = False):
     """يعيد ("market", سعر) أو ("pending", حافة المنطقة) أو ("skip", سبب).
 
     - داخل المنطقة، أو السعر أفضل منها (شراء تحتها / بيع فوقها): دخول فوري بسعر السوق.
@@ -26,6 +26,8 @@ def plan_entry(sig: dict, price: float):
         kind, entry = ("pending", hi) if price > hi else ("market", price)
     else:
         kind, entry = ("pending", lo) if price < lo else ("market", price)
+    if kind == "pending" and chase:
+        kind, entry = "market", price     # السعر لمس منطقة الدخول سابقاً ثم ابتعد: نلحقه بسعر السوق
     if kind == "market":
         room = (entry - sl) if side == "buy" else (sl - entry)
         if room < MIN_SL_ROOM:

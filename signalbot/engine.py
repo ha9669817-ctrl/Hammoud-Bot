@@ -116,8 +116,10 @@ class SignalBot:
             return skip("القناة موقوفة: " + self.paused[channel])
         if self._open_count() >= MAX_OPEN:
             # لا نهمل التوصية: تنتظر في الطابور حتى تُغلق الصفقة الحالية ثم تُقيَّم بسعر ذلك الوقت
+            touched = manage.plan_entry(sig, price)[0] == "market"
             self.trades["q:" + key] = {"state": "queued", "channel": channel, "msg": msg_id, "sig": sig,
-                                       "ticket": None, "expire_ts": time.time() + manage.PENDING_HOURS * 3600}
+                                       "ticket": None, "touched": touched,
+                                       "expire_ts": time.time() + manage.PENDING_HOURS * 3600}
             self.j.event("queued", channel=channel, msg=msg_id, signal=sig)
             self._save()
             return "في الطابور: توجد صفقة مفتوحة"
@@ -126,8 +128,8 @@ class SignalBot:
     def _open_count(self):
         return sum(1 for t in self.trades.values() if t["state"] == "open")
 
-    def _start(self, channel, msg_id, key, sig, price, skip):
-        kind, entry = manage.plan_entry(sig, price)
+    def _start(self, channel, msg_id, key, sig, price, skip, chase=False):
+        kind, entry = manage.plan_entry(sig, price, chase)
         if kind == "skip":
             return skip(entry)
         sl_dist = abs(entry - sig["sl"])
@@ -159,6 +161,9 @@ class SignalBot:
         """bars: [(high, low)] منذ الدورة السابقة. live: {ticket: 'open'} من الوسيط."""
         for tk, t in list(self.trades.items()):
             if t["state"] == "queued":
+                sg = t["sig"]
+                if not t.get("touched") and sg["lo"] is not None and any(lo <= sg["hi"] and hi >= sg["lo"] for hi, lo in bars):
+                    t["touched"] = True      # السعر مرّ على منطقة الدخول أثناء الانتظار
                 continue
             if t["state"] == "waiting":
                 self._check_waiting(tk, t, bars)
@@ -210,7 +215,7 @@ class SignalBot:
             if t["channel"] in self.paused:
                 skip("القناة موقوفة: " + self.paused[t["channel"]])
                 continue
-            self._start(t["channel"], t["msg"], key, t["sig"], price, skip)
+            self._start(t["channel"], t["msg"], key, t["sig"], price, skip, chase=t.get("touched", False))
 
     def _check_waiting(self, tk, t, bars):
         if time.time() > t["expire_ts"]:

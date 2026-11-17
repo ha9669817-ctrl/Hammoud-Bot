@@ -134,7 +134,7 @@ def test_second_signal_is_queued_then_taken_when_free():
 def test_queued_signal_becomes_waiting_if_price_not_at_zone():
     bot, ex, _ = make()
     bot.on_message("A", 1, STRUCT, 4040)
-    bot.on_message("A", 2, MASTER, 4421)
+    bot.on_message("A", 2, MASTER, 4430)       # وقت وصولها السعر فوق المنطقة ولم يلمسها
     ex.live.clear(); ex.profit = 3.0
     bot.tick([], {}, 4600)                     # السعر فوق منطقة الشراء: تنتظر الرجوع إليها
     assert not ex.live
@@ -257,3 +257,23 @@ def test_same_price_distances_for_every_lot_size():
         assert abs(f("buy", 4000, 4005, upp, lots) - 4001) < 1e-9
         assert abs(f("buy", 4000, 4012, upp, lots) - 4007) < 1e-9
         assert abs(f("sell", 4000, 3985, upp, lots) - 3990) < 1e-9
+
+
+def test_queued_signal_chases_if_price_touched_zone_then_left():
+    bot, ex, _ = make()
+    bot.on_message("A", 1, STRUCT, 4040)
+    bot.on_message("A", 2, MASTER, 4430)                    # شراء 4420-4422 والسعر فوقها: لم يصل بعد
+    bot.tick([(4432, 4419)], dict(ex.live), 4425)           # أثناء الانتظار لمس المنطقة
+    ex.live.clear(); ex.profit = 3.0
+    bot.tick([], {}, 4435)                                  # أُغلقت الأولى والسعر ابتعد لأعلى
+    assert len(ex.live) == 1                                # يلحقه فوراً بسعر السوق
+
+
+def test_queued_signal_waits_if_price_never_touched_zone():
+    bot, ex, _ = make()
+    bot.on_message("A", 1, STRUCT, 4040)
+    bot.on_message("A", 2, MASTER, 4430)
+    bot.tick([(4440, 4428)], dict(ex.live), 4435)           # لم تلمس المنطقة
+    ex.live.clear(); ex.profit = 3.0
+    bot.tick([], {}, 4435)
+    assert not ex.live and any(t["state"] == "waiting" for t in bot.trades.values())
