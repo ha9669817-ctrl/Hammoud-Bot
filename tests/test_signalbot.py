@@ -1,0 +1,167 @@
+import tempfile
+import time
+
+from signalbot import manage
+from signalbot.engine import Journal, SignalBot
+from signalbot.parser import parse_signal
+
+STRUCT = """📈 XAUUSD — BUY 🟢
+🎯 Entry Zone: 4038 - 4048
+🟢 TP1: 4053
+🟢 TP2: 4058
+🟢 TP3: 4063
+🔴 Stop Loss (SL): 4033"""
+LIQ = "SELL LIMIT XAUUSD ENTRY 4139 - 4141 SL. 4143 Tp1. 4137 Tp2. 4135 Tp3. 4133"
+MASTER = "Gold buy now 4420-4422\nSL: 4408\nTP: 4425\nTP2: 4430\nTP3: 4440"
+MASTER_MKT = "Gold sell now\nSL: 4450\nTP1: 4430\nTP2: 4425"
+
+
+def test_parse_formats():
+    s = parse_signal(STRUCT)
+    assert s["side"] == "buy" and (s["lo"], s["hi"], s["sl"]) == (4038, 4048, 4033) and len(s["tps"]) == 3
+    s = parse_signal(LIQ)
+    assert s["side"] == "sell" and s["sl"] == 4143 and s["tps"][0] == 4137
+    s = parse_signal(MASTER)
+    assert s["side"] == "buy" and (s["lo"], s["hi"]) == (4420, 4422)
+    s = parse_signal(MASTER_MKT)
+    assert s["lo"] is None and s["side"] == "sell"
+
+
+def test_parse_rejects_noise_and_bad_geometry():
+    assert parse_signal("Tp3✅ +300 pips") is None
+    assert parse_signal("BTC buy 60000 SL 59000 TP1 61000") is None
+    # وقف على الجهة الخطأ
+    assert parse_signal("XAUUSD BUY ENTRY 4000 - 4002 SL 4010 TP1 4020") is None
+
+
+def test_plan_entry():
+    sig = parse_signal(STRUCT)
+    assert manage.plan_entry(sig, 4040)[0] == "market"
+    assert manage.plan_entry(sig, 4050)[0] == "pending"
+    kind, why = manage.plan_entry(sig, 4100)
+    assert kind == "skip" and "بعيد" in why
+
+
+def test_trailing_never_moves_back_and_locks_profit():
+    tps = [4053, 4058, 4063]
+    stop, lvl = manage.next_stop("buy", 4040, 4033, tps, 4033, 4054, 4041, 0)
+    assert lvl == 1 and abs(stop - (4040 + 0.7)) < 1e-9
+    stop2, lvl2 = manage.next_stop("buy", 4040, 4033, tps, stop, 4050, 4030, lvl)
+    assert (stop2, lvl2) == (stop, lvl)
+    stop3, lvl3 = manage.next_stop("buy", 4040, 4033, tps, stop, 4059, 4045, lvl)
+    assert lvl3 == 2 and stop3 == 4053
+    # بيع
+    s, l = manage.next_stop("sell", 4140, 4143, [4137, 4135, 4133], 4143, 4139, 4136, 0)
+    assert l == 1 and abs(s - (4140 - 0.3)) < 1e-9
+
+
+class FakeEx:
+    def __init__(self, balance=1000.0, risk_per_lot=100.0):
+        self.balance, self.rpl = balance, risk_per_lot
+        self.live, self.modified, self.profit, self.next = {}, [], None, 100
+        self.fail_modify = False
+
+    def size(self, sl_dist, risk_pct):
+        lots = max(0.01, round(self.balance * risk_pct / 100 / (sl_dist * self.rpl), 2))
+        return lots, lots * sl_dist * self.rpl, self.balance
+
+    def place(self, side, sl, tp, lots):
+        self.next += 1
+        self.live[self.next] = "open"
+        return self.next
+
+    def modify_sl(self, ticket, sl):
+        if self.fail_modify:
+            raise RuntimeError("boom")
+        self.modified.append((ticket, sl))
+
+    def closed_profit(self, ticket, since):
+        return self.profit
+
+
+def make(ex=None, channels=("A",), enabled=True):
+    d = tempfile.mkdtemp()
+    ex = ex or FakeEx()
+    return SignalBot(Journal(d), ex, channels, is_enabled=lambda: enabled), ex, d
+
+
+def test_entry_trail_and_close_journal():
+    bot, ex, _ = make()
+    assert bot.on_message("A", 1, STRUCT, 4040).startswith("market")
+    t = list(ex.live)[0]
+    bot.tick([(4054, 4041)], dict(ex.live))
+    assert ex.modified and ex.modified[-1][0] == t
+    ex.live.clear(); ex.profit = 12.5
+    bot.tick([], dict(ex.live))
+    rows = bot.j.read("trades.jsonl")
+    assert len(rows) == 1 and rows[0]["profit"] == 12.5 and not bot.trades
+    assert "ربح" in bot.j.lessons_text()
+
+
+def test_dedup_disabled_and_unknown_channel():
+    bot, ex, _ = make()
+    assert bot.on_message("A", 1, STRUCT, 4040).startswith("market")
+    assert bot.on_message("A", 1, STRUCT, 4040) == "مكرر"
+    assert "غير مفعّلة" in bot.on_message("Z", 2, STRUCT, 4040)
+    off, _, _ = make(enabled=False)
+    assert "متوقف" in off.on_message("A", 3, STRUCT, 4040)
+
+
+def test_skip_far_price_and_tiny_account_risk():
+    bot, ex, _ = make()
+    assert "بعيد" in bot.on_message("A", 1, STRUCT, 4100)
+    small, ex2, _ = make(FakeEx(balance=20.0, risk_per_lot=100.0))
+    r = small.on_message("A", 1, STRUCT, 4040)
+    assert "أصغر لوت" in r and not ex2.live
+
+
+def test_max_open_limit():
+    bot, ex, _ = make()
+    bot.on_message("A", 1, STRUCT, 4040)
+    bot.on_message("A", 2, MASTER, 4421)
+    assert "الحد الأقصى" in bot.on_message("A", 3, LIQ, 4140)
+
+
+def test_modify_failure_is_retried_next_tick():
+    bot, ex, _ = make()
+    bot.on_message("A", 1, STRUCT, 4040)
+    ex.fail_modify = True
+    bot.tick([(4054, 4041)], dict(ex.live))
+    t = next(iter(bot.trades.values()))
+    assert t["level"] == 0 and not ex.modified
+    ex.fail_modify = False
+    bot.tick([(4054, 4041)], dict(ex.live))
+    assert ex.modified and t["level"] == 1
+
+
+def test_losing_channel_gets_paused_and_state_survives_restart():
+    bot, ex, d = make()
+    for i in range(8):
+        bot.on_message("A", i, STRUCT.replace("4033", "4034"), 4040)
+        ex.live.clear(); ex.profit = -5.0
+        bot.tick([], {})
+    assert "A" in bot.paused
+    assert "موقوفة" in bot.on_message("A", 99, STRUCT, 4040)
+    again = SignalBot(Journal(d), FakeEx(), ["A"])
+    assert "A" in again.paused
+    again.resume("A")
+    assert "A" not in again.paused
+
+
+def test_waiting_zone_fills_when_price_touches_edge():
+    bot, ex, _ = make()
+    assert bot.on_message("A", 1, STRUCT, 4050).startswith("pending")
+    assert not ex.live
+    bot.tick([(4060, 4051)], {})            # لم يلمس 4048
+    assert not ex.live
+    bot.tick([(4052, 4047)], {})            # لمس الحافة
+    assert len(ex.live) == 1 and next(iter(bot.trades.values()))["state"] == "open"
+
+
+def test_waiting_expires():
+    bot, ex, _ = make()
+    bot.on_message("A", 1, STRUCT, 4050)
+    for t in bot.trades.values():
+        t["expire_ts"] = time.time() - 1
+    bot.tick([(4052, 4047)], {})
+    assert not bot.trades and not ex.live

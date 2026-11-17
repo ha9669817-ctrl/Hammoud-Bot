@@ -2,131 +2,114 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>مركز التداول · HAMAD</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%233b82f6%27/%3E%3Ctext x=%2732%27 y=%2742%27 font-size=%2726%27 text-anchor=%27middle%27 font-family=%27Arial%27 font-weight=%27700%27 fill=%27%23fff%27%3EMA%3C/text%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>بوت التوصيات</title>
 <style>
-:root{
-  --bg:#0b0e14; --surface:#131821; --surface2:#1a2130; --line:#243044;
-  --text:#e6ebf3; --muted:#94a0b5; --accent:#3b82f6; --up:#22c55e; --down:#ef4444; --warn:#f59e0b;
-}
-*{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--text)}
-body{font-family:"IBM Plex Sans Arabic",system-ui,"Segoe UI",Tahoma,sans-serif;font-size:16px;line-height:1.55;-webkit-text-size-adjust:100%}
-.wrap{max-width:720px;margin:0 auto;padding:16px}
-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
-.brand{font-size:20px;font-weight:700}
-.owner{font-size:13px;color:var(--muted);margin-top:2px}
-.owner b{color:var(--text)}
-.live{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px;margin-top:4px}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none}
-.dot.ok{background:var(--up)} .dot.bad{background:var(--down)} .dot.warn{background:var(--warn)}
-.pw-row{width:100%;margin-top:4px}
-.inp{font:inherit;width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:16px}
-.link{border:1px solid var(--line);background:var(--surface);border-radius:14px;padding:12px 14px;font-size:14px;margin-bottom:12px}
-.link.ok{border-color:#1f4d33} .link.warn{border-color:#5a4316} .link.bad{border-color:#5a2226}
-.link b{display:block;font-size:15px;margin-bottom:2px}
-.cards{display:grid;gap:12px;grid-template-columns:1fr}
-@media(min-width:560px){.cards{grid-template-columns:1fr 1fr}}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:18px}
-.label{font-size:14px;color:var(--muted)}
-.big{font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;font-size:32px;font-weight:700;margin-top:6px;word-break:break-all}
-.sub{font-size:13px;color:var(--muted);margin-top:6px}
-.up{color:var(--up)} .down{color:var(--down)}
-h2{margin:18px 0 4px;font-size:18px}
-.hint{font-size:14px;color:var(--muted);margin:0 0 12px}
-.bots{display:grid;gap:12px}
-.bot{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:14px}
-.bot .name{font-weight:600;font-size:16px}
-.bot .meta{font-size:13px;color:var(--muted);margin-top:2px}
-.btns{display:grid;gap:8px;grid-template-columns:1fr 1fr;margin-top:12px}
-button{font:inherit;cursor:pointer;min-height:46px;border-radius:12px;padding:10px 12px;border:1px solid var(--line);background:var(--surface2);color:var(--text);font-size:15px;font-weight:600}
-button:active:not(:disabled){transform:scale(.98)}
-button.on{background:var(--accent);border-color:var(--accent);color:#fff}
-button.stop{background:#2a1417;border-color:#6b2a30;color:#fca5a5}
-button:disabled{opacity:.5;cursor:not-allowed}
-.running{display:inline-block;font-size:12px;color:var(--up);border:1px solid #1f4d33;border-radius:999px;padding:1px 8px;margin-inline-start:6px;vertical-align:middle}
-#msg{min-height:22px;font-size:15px;margin-top:12px;color:var(--muted)}
-#msg.err{color:var(--down)} #msg.ok{color:var(--up)}
-footer{margin:24px 0 8px;text-align:center;font-size:13px;color:var(--muted)}
+:root{--bg:#0f1419;--card:#18202a;--line:#2a3542;--tx:#e6edf3;--mut:#8b9bab;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--acc:#58a6ff}
+@media(prefers-color-scheme:light){:root{--bg:#f4f6f8;--card:#fff;--line:#d9e0e7;--tx:#1b232c;--mut:#5b6b7b}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.6 system-ui,"Segoe UI",Tahoma,sans-serif;padding:16px;max-width:900px;margin-inline:auto}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:16px;margin:0 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:12px 0}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.grow{flex:1}.mut{color:var(--mut);font-size:13px}.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:8px 14px;font:inherit;cursor:pointer}
+button.off{background:var(--bad)}button.sec{background:transparent;color:var(--tx);border:1px solid var(--line)}
+input,select,textarea{background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;width:100%}
+textarea{min-height:90px}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:start;vertical-align:top}
+pre{white-space:pre-wrap;margin:0;font:13px/1.6 ui-monospace,monospace}
+.big{font-size:22px;font-weight:700}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div>
-      <div class="brand">مركز التداول</div>
-      <div class="owner">المالك والمطور: <b>HAMAD</b></div>
-      <div class="live"><span id="liveDot" class="dot"></span><span id="liveText">جارٍ الاتصال…</span></div>
-    </div>
-  </header>
-  <div class="pw-row"><input id="pw" type="password" class="inp" placeholder="كلمة مرور الإدارة (لتشغيل وإيقاف البوتات)" autocomplete="current-password"></div>
+<h1>بوت التوصيات <span class="mut" id="ver"></span></h1>
+<div class="mut">يقرأ توصيات القنوات ← يدخل بقواعد ثابتة ← يحرّك الوقف فقط ← يسجّل ويتعلّم. حساب تجريبي فقط · صنع HAMAD</div>
 
-  <div id="link" class="link" style="margin-top:12px">جارٍ قراءة حالة الوسيط…</div>
-
-  <div class="cards">
-    <section class="card">
-      <div class="label">الرصيد</div>
-      <div id="balance" class="big">—</div>
-      <div id="balanceSub" class="sub"></div>
-    </section>
-    <section class="card">
-      <div class="label">إجمالي ربح البوتات</div>
-      <div id="totalProfit" class="big">—</div>
-      <div id="totalSub" class="sub"></div>
-    </section>
+<div class="card">
+  <div class="row">
+    <div><div class="mut">الرصيد</div><div class="big" id="bal">—</div></div>
+    <div class="grow"></div>
+    <div><div class="mut">حالة البوت</div><div class="big" id="onoff">—</div></div>
   </div>
-
-  <h2>قائمة البوتات</h2>
-  <p class="hint">اختر الأصل لكل بوت. الذهب يبقى مقفلاً حتى يبلغ الرصيد الحد المحدد.</p>
-  <div id="botList" class="bots"></div>
-  <div id="msg"></div>
-
-  <h2 style="margin-top:22px">البوت الذكي (بحث وتعلّم تلقائي)</h2>
-  <p class="hint">يراقب الذهب والبيتكوين دائماً ويبحث عن استراتيجية تجتاز اختباراً صارماً. المراقبة والبحث يعملان دوماً؛
-  فتح الصفقات الفعلي لا يبدأ إلا بالزر أدناه، وحتى لو فُعِّل فلن يفتح صفقة قبل أن يجد استراتيجية مقبولة.</p>
-  <div id="smartbotReady" class="link" style="margin-bottom:10px"></div>
-  <div class="btns" style="grid-template-columns:1fr 1fr">
-    <button id="smartbotOn" class="on">تفعيل فتح الصفقات</button>
-    <button id="smartbotOff">إيقاف فتح الصفقات</button>
+  <div class="row" style="margin-top:10px">
+    <input id="pw" type="password" placeholder="كلمة مرور الإدارة" style="max-width:240px">
+    <button id="bOn">تشغيل</button><button id="bOff" class="off">إيقاف</button>
   </div>
-  <div id="smartbotList" class="bots" style="margin-top:12px"></div>
-
-  <h2 style="margin-top:22px">تصدير الشموع للتحليل</h2>
-  <p class="hint">تنزيل آخر شموع الساعة المكتملة (CSV) لاختبار الاستراتيجية على بيانات حقيقية. يحتاج كلمة مرور الإدارة.</p>
-  <div class="btns" style="grid-template-columns:1fr 1fr">
-    <button id="expXAU">تصدير الذهب</button>
-    <button id="expBTC">تصدير البيتكوين</button>
-  </div>
-
-  <h2 style="margin-top:22px">سحب تاريخ الشموع</h2>
-  <p class="hint">يعمل في الخلفية. اختر الفريمات والمدة والرموز. الدقائق (5 و15) تنتج ملفات كبيرة، فاختر مدة أقصر إذا سحبت كل الأزواج.</p>
-  <div style="display:grid;gap:10px">
-    <div>
-      <div class="hint">الفريمات:</div>
-      <label><input type="checkbox" name="hTf" value="5m"> 5 دقائق</label>
-      <label><input type="checkbox" name="hTf" value="15m"> 15 دقيقة</label>
-      <label><input type="checkbox" name="hTf" value="1h" checked> ساعة</label>
-      <label><input type="checkbox" name="hTf" value="1d" checked> يومي</label>
-      <label><input type="checkbox" name="hTf" value="1w" checked> أسبوعي</label>
-      <label><input type="checkbox" name="hTf" value="1mo" checked> شهري</label>
-    </div>
-    <label>المدة بالأيام (1 إلى 400):
-      <input type="number" id="histDays" value="365" min="1" max="400">
-    </label>
-    <label>الرموز:
-      <select id="histSyms">
-        <option value="assets">الذهب والبيتكوين</option>
-        <option value="all">كل الأزواج</option>
-      </select>
-    </label>
-    <button id="histStart" class="on">بدء السحب</button>
-    <button id="histZip">تحميل الملفات المسحوبة (ZIP)</button>
-  </div>
-  <pre id="histOut" class="hint" style="white-space:pre-wrap;margin-top:12px"></pre>
-
-  <footer>المالك والمطور: HAMAD</footer>
+  <div class="mut" id="health" style="margin-top:8px"></div>
+  <div class="bad" id="msg"></div>
 </div>
-<script src="/static/app.js" defer></script>
+
+<div class="card"><h2>القنوات (تقييم فعلي من صفقاتي أنا)</h2>
+  <table><thead><tr><th>القناة</th><th>صفقات</th><th>مجموع R</th><th>متوسط R</th><th>الحالة</th></tr></thead><tbody id="stats"></tbody></table>
+  <div class="mut" style="margin-top:6px">التعلّم: القناة التي تخسر فعلياً (آخر 15 صفقة بمجموع سالب بعد 8 صفقات) تُوقف تلقائياً. هذا حماية وليس صناعة ربح.</div>
+</div>
+
+<div class="card"><h2>صفقات حالية</h2><table><tbody id="open"></tbody></table></div>
+
+<div class="card"><h2>آخر القرارات</h2><table><tbody id="events"></tbody></table></div>
+
+<div class="card"><h2>الصفقات المغلقة</h2><table><tbody id="trades"></tbody></table></div>
+
+<div class="card"><h2>الدروس المسجّلة</h2><pre id="lessons" class="mut"></pre></div>
+
+<div class="card"><h2>لصق توصية يدوياً (اختبار أو بديل)</h2>
+  <div class="row"><select id="mch" style="max-width:220px"></select>
+  <label class="mut"><input type="checkbox" id="dry" checked style="width:auto"> تحليل فقط بدون تنفيذ</label></div>
+  <textarea id="mtext" placeholder="الصق نص التوصية هنا" style="margin-top:8px"></textarea>
+  <div class="row" style="margin-top:8px"><button id="mgo">إرسال</button><span id="mres" class="mut"></span></div>
+</div>
+
+<div class="card"><h2>سحب الشموع</h2>
+  <div class="row"><input id="hsym" value="XAUUSDm" style="max-width:200px"><input id="hdays" type="number" value="365" style="max-width:100px">
+  <label class="mut"><input type="checkbox" class="tf" value="1h" checked style="width:auto"> 1h</label>
+  <label class="mut"><input type="checkbox" class="tf" value="1d" checked style="width:auto"> 1d</label>
+  <label class="mut"><input type="checkbox" class="tf" value="5m" style="width:auto"> 5m</label>
+  <button id="hgo">ابدأ</button><button id="hzip" class="sec">تنزيل zip</button></div>
+  <div class="mut" id="hst"></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const store={get(k){try{return localStorage.getItem(k)||""}catch(e){return ""}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+$("pw").value=store.get("pw");
+const hdr=()=>({"Content-Type":"application/json","X-Admin-Password":$("pw").value});
+const el=(tag,txt,cls)=>{const e=document.createElement(tag);if(txt!==undefined)e.textContent=txt;if(cls)e.className=cls;return e};
+function fill(tb,rows){tb.replaceChildren();if(!rows.length){const r=el("tr"),c=el("td","لا شيء بعد","mut");r.append(c);tb.append(r)}rows.forEach(cells=>{const r=el("tr");cells.forEach(c=>{const td=el("td");if(c instanceof Node)td.append(c);else td.textContent=c;r.append(td)});tb.append(r)})}
+async function api(path,body){
+  store.set("pw",$("pw").value);
+  const r=await fetch(path,{method:body===undefined?"GET":"POST",headers:hdr(),body:body===undefined?undefined:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.status);return j}
+const ar={entry:"دخول",waiting:"انتظار منطقة",filled:"فُتحت من الانتظار",trail:"تحريك وقف",skip:"تجاهل",expired:"انتهت",channel_paused:"إيقاف قناة",error:"خطأ",decision:"قرار"};
+async function refresh(){
+  try{
+    const s=await (await fetch("/api/state")).json();
+    $("ver").textContent="· "+s.version;
+    $("bal").textContent=s.account&&s.account.balance!=null?Number(s.account.balance).toFixed(2)+" "+(s.account.currency||""):(s.account&&s.account.error)||"—";
+    const on=$("onoff");on.textContent=s.on?"يعمل":"متوقف";on.className="big "+(s.on?"ok":"bad");
+    const h=[];
+    h.push(s.mode_ready?"وضع التجريبي: مفعّل":"SIGNALBOT_MODE ليس demo: التنفيذ مقفل");
+    h.push("تيليجرام: "+(s.telegram.running?"متصل":"غير متصل"+(s.telegram.error?" — "+s.telegram.error:"")));
+    h.push("المتابعة: "+(s.runner?(s.runner.error?"خطأ "+s.runner.error:"آخر دورة "+(s.runner.last_tick||"لم تبدأ")):"لم تبدأ"+(s.boot_error?" — "+s.boot_error:"")));
+    $("health").textContent=h.join(" · ");
+    const ch=$("mch");if(!ch.options.length)s.channels.forEach(c=>ch.append(new Option(c,c)));
+    fill($("stats"),Object.entries(s.stats).map(([n,v])=>{
+      const st=el("span",v.paused?"موقوفة: "+v.paused:"تعمل",v.paused?"bad":"ok");
+      const cell=el("span");cell.append(st);
+      if(v.paused){const b=el("button","استئناف","sec");b.onclick=()=>api("/api/signalbot/resume",{channel:n}).then(refresh).catch(e=>$("msg").textContent=e.message);cell.append(" ",b)}
+      return [n,v.trades,v.sum_r,v.avg_r==null?"—":v.avg_r,cell]}));
+    fill($("open"),s.open.map(t=>[t.channel,t.side==="buy"?"شراء":"بيع",t.state==="waiting"?"ينتظر "+t.entry:"دخول "+t.entry,"وقف "+t.stop,"مستوى "+t.level]));
+    fill($("events"),s.events.slice(0,15).map(e=>[(e.at||"").replace("T"," ").slice(5,16),ar[e.event]||e.event,e.channel||"",e.reason||e.result||e.error||(e.new?"وقف→"+e.new:"")||""]));
+    fill($("trades"),s.trades.map(t=>[(t.closed_at||"").slice(5,16),t.channel,t.side==="buy"?"شراء":"بيع",el("span",(t.profit>0?"+":"")+t.profit+"$ ("+t.r+"R)",t.profit>0?"ok":"bad")]));
+    $("lessons").textContent=s.lessons||"لا دروس بعد";
+  }catch(e){$("msg").textContent="تعذّر تحديث البيانات: "+e.message}
+}
+async function toggle(on){$("msg").textContent="";try{await api("/api/signalbot/toggle",{on});refresh()}catch(e){$("msg").textContent=e.message}}
+$("bOn").onclick=()=>toggle(true);$("bOff").onclick=()=>toggle(false);
+$("mgo").onclick=async()=>{try{const r=await api("/api/signalbot/message",{channel:$("mch").value,text:$("mtext").value,dry:$("dry").checked});$("mres").textContent=r.note+(r.parsed?" — "+JSON.stringify(r.parsed):"");refresh()}catch(e){$("mres").textContent=e.message}};
+$("hgo").onclick=async()=>{try{await api("/api/history/start",{symbols:$("hsym").value,days:+$("hdays").value,intervals:[...document.querySelectorAll(".tf:checked")].map(x=>x.value)});hst()}catch(e){$("hst").textContent=e.message}};
+$("hzip").onclick=async()=>{try{const r=await fetch("/api/history/zip",{headers:hdr()});if(!r.ok)throw new Error(r.status);const a=document.createElement("a");a.href=URL.createObjectURL(await r.blob());a.download="history.zip";a.click()}catch(e){$("hst").textContent="تعذّر التنزيل: "+e.message}};
+async function hst(){try{const s=await api("/api/history/status");$("hst").textContent=(s.running?"يعمل… ":"")+Object.entries(s.jobs).map(([k,v])=>k+": "+v.status+(v.rows!=null?" ("+v.rows+")":"")+(v.error?" "+v.error:"")).join(" | ")}catch(e){}}
+refresh();setInterval(refresh,15000);setInterval(hst,10000);
+</script>
 </body>
 </html>

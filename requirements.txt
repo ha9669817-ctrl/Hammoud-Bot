@@ -3,3 +3,4 @@ gunicorn>=22,<24
 pandas>=2.2,<4
 numpy>=1.26,<3
 requests>=2.31,<3
+telethon>=1.36,<2
