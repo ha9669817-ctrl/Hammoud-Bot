@@ -180,3 +180,28 @@ def test_waiting_expires():
         t["expire_ts"] = time.time() - 1
     bot.tick([(4052, 4047)], {})
     assert not bot.trades and not ex.live
+
+
+FF_BUY = "BUY  GOLD      👉  3870 / 3866\n\nTP1.                 👉 3885\n\nTP2.                 👉 3900\n\nTP3.                 👉 3940\n\nTP4.                 👉 3980\n\nTP5.                 👉 4085\n\nSL.                  👉  3855\n\nافتح حساب تحت وكالتي بشركة Vantage\nhttps://vigco.co/la-com-inv/F8nHlAnk\nhttps://one.exnessonelink.com/a/tt6qgt6q\n@MohamedForex3"
+FF_SELL = "SELL  GOLD      👉  3868/ 3872\n\nTP1.   👉 3855\n\nTP2.   👉 3840\n\nSL.   👉  3880"
+MB_IMG = "Gold sell now 4112-4110\n\nSL: 4127\n\nTP1: 4108\nTP2: 4104\nTP3: 4100\nTP4: 4096\nTP5: 4092\nملاحظة: التزم باللوت المناسب وإدارة رأس المال"
+MB_MD = "**Gold buy now 4335-**4336\n\n**Second buy limit 4325-**4326\n\n**SL: **4316\n**TP:** 4346"
+LIQ_2 = "SELL LIMIT XAUUSD\nENTRY 4193.7 - 4195.7\nSL.  4198\nTp1. 4191.7\nTp2. 4189.5\nTp3. 4186.5"
+
+
+def test_real_channel_samples():
+    s = parse_signal(FF_BUY, "Free Forex Signals")
+    assert (s["side"], s["lo"], s["hi"], s["sl"], s["tps"][0]) == ("buy", 3866, 3870, 3855, 3885)
+    s = parse_signal(FF_SELL, "Free Forex Signals")
+    assert (s["side"], s["lo"], s["hi"], s["sl"]) == ("sell", 3868, 3872, 3880)
+    s = parse_signal(MB_IMG, "Master blue")
+    assert (s["side"], s["lo"], s["hi"], s["sl"], len(s["tps"])) == ("sell", 4110, 4112, 4127, 5)
+    s = parse_signal(MB_MD, "Master blue")
+    assert (s["side"], s["lo"], s["hi"], s["sl"], s["tps"]) == ("buy", 4335, 4336, 4316, [4346])
+    s = parse_signal(LIQ_2, "Liquidity Trader")
+    assert (s["side"], s["lo"], s["hi"], s["sl"]) == ("sell", 4193.7, 4195.7, 4198)
+
+
+def test_other_pairs_and_summaries_ignored():
+    assert parse_signal("BUY EURUSD 👉 1.0850\nTP1 👉 1.0900\nSL 👉 1.0800", "Free Forex Signals") is None
+    assert parse_signal("صفقات يوم الاثنين\nGold buy - SL 40pip❌\nGold sell - tp 88pip✅", "Liquidity Trader") is None

@@ -9,6 +9,7 @@ from flask import Flask, Response, jsonify, request
 
 import history
 from broker import SignalExecutor, make_client
+from signalbot.adopt import ManualManager
 from signalbot.engine import Journal, SignalBot
 from signalbot.parser import parse_signal
 from signalbot.runner import Runner
@@ -50,7 +51,7 @@ def boot():
         try:
             executor = SignalExecutor(store)
             bot = SignalBot(Journal(DATA_DIR / "signalbot"), executor, CHANNELS.values(), is_enabled=is_on)
-            runner = Runner(bot, executor)
+            runner = Runner(bot, executor, ManualManager(executor, bot.j))
             runner.start()
             SB.update(bot=bot, runner=runner, error=None)
             tg = TelegramIngest(runner.push, CHANNELS)
@@ -144,7 +145,7 @@ def manual_message():
     text, channel = str(body.get("text", "")), str(body.get("channel", ""))
     if channel not in CHANNELS.values():
         return jsonify({"error": "اسم قناة غير معروف", "channels": list(CHANNELS.values())}), 400
-    sig = parse_signal(text)
+    sig = parse_signal(text, channel)
     if not sig:
         return jsonify({"ok": False, "parsed": None, "note": "النص ليس توصية ذهب مكتملة"})
     if body.get("dry"):

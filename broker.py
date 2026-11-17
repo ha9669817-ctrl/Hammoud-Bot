@@ -276,11 +276,17 @@ class SignalExecutor:
     def closed_profit(self, ticket, since_iso):
         return self.client.closed_profit(ticket, since_iso)
 
+    def positions_raw(self):
+        return [p for p in self.client.positions() if isinstance(p, dict)]
+
     def recent_bars(self, since_ts):
+        return self.bars_for(self.symbol, since_ts)
+
+    def bars_for(self, symbol, since_ts):
         """(high, low) لشموع الدقيقة منذ since_ts (ثوانٍ). يعيد (bars, آخر_وقت, آخر_إغلاق)."""
         now = datetime.now(timezone.utc)
         data = self.client._acct("GET", "/candles", params={
-            "symbol": self.symbol, "timeframe": "M1", "count": 120,
+            "symbol": symbol, "timeframe": "M1", "count": 120,
             "from": (now - timedelta(minutes=120)).isoformat(), "to": now.isoformat()})
         rows = []
         for c in _items(data, "candles", "data", "items", "bars"):

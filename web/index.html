@@ -79,7 +79,7 @@ async function api(path,body){
   store.set("pw",$("pw").value);
   const r=await fetch(path,{method:body===undefined?"GET":"POST",headers:hdr(),body:body===undefined?undefined:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.status);return j}
-const ar={queued:"في الطابور",entry:"دخول",waiting:"انتظار منطقة",filled:"فُتحت من الانتظار",trail:"تحريك وقف",skip:"تجاهل",expired:"انتهت",channel_paused:"إيقاف قناة",error:"خطأ",decision:"قرار"};
+const ar={adopt:"اكتشاف صفقة يدوية",adopt_no_sl:"صفقة بلا وقف",queued:"في الطابور",entry:"دخول",waiting:"انتظار منطقة",filled:"فُتحت من الانتظار",trail:"تحريك وقف",skip:"تجاهل",expired:"انتهت",channel_paused:"إيقاف قناة",error:"خطأ",decision:"قرار"};
 async function refresh(){
   try{
     const s=await (await fetch("/api/state")).json();

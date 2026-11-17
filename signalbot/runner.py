@@ -7,8 +7,8 @@ TICK_S = 20
 
 
 class Runner:
-    def __init__(self, bot, executor):
-        self.bot, self.ex = bot, executor
+    def __init__(self, bot, executor, manual=None):
+        self.bot, self.ex, self.manual = bot, executor, manual
         self.inbox = queue.Queue()
         self.price = None
         self.state = {"alive": False, "last_tick": None, "error": None}
@@ -46,6 +46,9 @@ class Runner:
             self.bot.j.event("decision", channel=ch, msg=mid, result=res)
             live = self.ex.open_tickets()
         self.bot.tick(bars, live, self.price)
+        if self.manual is not None and self.bot.is_enabled():
+            own = {str(t["ticket"]) for t in self.bot.trades.values() if t.get("ticket") is not None}
+            self.manual.tick(own, time.time())
 
     def _loop(self):
         self.state["alive"] = True

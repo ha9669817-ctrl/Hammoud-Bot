@@ -39,3 +39,54 @@ def test_message_without_price_is_skipped():
     r = Runner(bot, ex)
     r.push("A", 1, STRUCT); r.step()
     assert not ex.live
+
+
+from signalbot.adopt import ManualManager, normalize, target_stop
+
+
+def test_target_stop_ladder():
+    assert target_stop("buy", 100, 90, 105) is None
+    assert target_stop("buy", 100, 90, 110) == 101
+    assert target_stop("buy", 100, 90, 120) == 110
+    assert target_stop("sell", 100, 110, 90) == 99
+    assert target_stop("sell", 100, 110, 80) == 90
+
+
+class MEx:
+    def __init__(self):
+        self.pos = [{"ticket": 7, "symbol": "XAUUSDm", "side": "BUY", "openPrice": 100.0, "stopLoss": 90.0}]
+        self.mods, self.bars = [], ([], 1, 100.0)
+
+    def positions_raw(self): return self.pos
+    def bars_for(self, sym, since): return self.bars
+    def modify_sl(self, t, sl): self.mods.append((t, sl))
+
+
+def test_manual_positions_adopted_and_trailed_many():
+    ex = MEx()
+    ex.pos.append({"ticket": 8, "symbol": "XAUUSDm", "side": "SELL", "openPrice": 100.0, "stopLoss": 110.0})
+    ex.pos.append({"ticket": 9, "symbol": "XAUUSDm", "side": "BUY", "openPrice": 100.0})
+    j = Journal(tempfile.mkdtemp())
+    m = ManualManager(ex, j)
+    m.tick(set(), 1)
+    assert not ex.mods
+    ex.bars = ([(111.0, 99.0)], 2, 108.0)
+    m.tick(set(), 2)
+    assert (7, 101.0) in ex.mods and len(ex.mods) == 1
+    ex.pos[0]["stopLoss"] = 101.0
+    ex.bars = ([(104.0, 88.0)], 3, 92.0)
+    m.tick(set(), 3)
+    assert any(t == 8 for t, _ in ex.mods)
+    assert not any(t == 9 for t, _ in ex.mods)
+    assert any(e.get("event") == "adopt_no_sl" for e in j.read("events.jsonl"))
+
+
+def test_bot_own_tickets_are_not_touched_by_manual_manager():
+    ex = MEx(); ex.bars = ([(130.0, 99.0)], 2, 125.0)
+    m = ManualManager(ex, Journal(tempfile.mkdtemp()))
+    m.tick({"7"}, 1)
+    assert not ex.mods
+
+
+def test_normalize_unreadable_returns_none():
+    assert normalize({"foo": 1}) is None

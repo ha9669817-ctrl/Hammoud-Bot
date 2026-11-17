@@ -31,18 +31,18 @@ def _structured(s):
     side = "buy" if m.group(1) == "BUY" else "sell"
     after = s[m.end():]
     e = re.search(r"ENTRY[^\d]*" + NUM + r"[^\d]+" + NUM, after) or \
-        re.search(r"(?:GOLD|XAUUSD)[^\d\n]*" + NUM + r"[^\d]+" + NUM, after)
+        re.search(r"(?:GOLD|XAUUSD)[^\d\n]*" + NUM + r"\s*[/\-–]\s*" + NUM, after)
     if e:
         e1, e2 = float(e.group(1)), float(e.group(2))
     else:
-        e1m = re.search(r"ENTRY[^\d]*" + NUM, after)
+        e1m = re.search(r"ENTRY[^\d]*" + NUM, after) or re.search(r"(?:GOLD|XAUUSD)[^\d\n]*" + NUM, after)
         if not e1m:
             return None
         e1 = e2 = float(e1m.group(1))
     sl_m = re.search(r"\bSL\b[^\d\n]*" + NUM, after) or re.search(r"STOP[^\d\n]*LOSS[^\d\n]*" + NUM, after)
     if not sl_m:
         return None
-    tps = [float(x) for x in re.findall(r"TP\s*\d[^\d\n]*" + NUM, after)]
+    tps = [float(x) for x in re.findall(r"(?<![A-Z])TP\s*\d*[^\d\n]*" + NUM, after)]
     if not tps:
         return None
     return side, min(e1, e2), max(e1, e2), float(sl_m.group(1)), tps
@@ -66,16 +66,35 @@ def _one_liner(s):
     sl_m = re.search(r"SL[:\s]*" + NUM, s)
     if not sl_m:
         return None
-    tps = [float(x) for x in re.findall(r"TP\s*\d*[:\s]*" + NUM, s)]
+    tps = [float(x) for x in re.findall(r"(?<![A-Z])TP\s*\d*[:\s]*" + NUM, s)]
     if not tps:
         return None
     return side, lo, hi, float(sl_m.group(1)), tps
 
 
-def parse_signal(text: str):
+def _first_line(s):
+    for ln in s.splitlines():
+        if ln.strip():
+            return ln
+    return ""
+
+
+# قواعد خاصة بكل قناة: السطر الأول يجب أن يحدد الذهب (حتى لا تُقرأ توصيات أزواج أخرى أو ملخصات)
+CHANNEL_HEAD = {
+    "free forex signals": r"(^|\n)\s*(BUY|SELL)(\s+(LIMIT|STOP))?\s+(GOLD|XAUUSD)\b",
+    "master blue": r"\b(GOLD|XAUUSD)\b.*\b(BUY|SELL)\b|\b(BUY|SELL)\b.*\b(GOLD|XAUUSD)\b",
+    "liquidity trader": r"\b(BUY|SELL)\b.*\b(GOLD|XAUUSD)\b|\b(GOLD|XAUUSD)\b.*\b(BUY|SELL)\b",
+    "trade sniper": r"XAUUSD|GOLD",
+}
+
+
+def parse_signal(text: str, channel: str = None):
     """يعيد dict(side, lo, hi, sl, tps) أو None. lo/hi=None تعني دخول بسعر السوق."""
-    s = (text or "").upper()
+    s = re.sub(r"[*_`]", "", (text or "")).upper()
     if not re.search(r"XAU|GOLD", s):
+        return None
+    head = CHANNEL_HEAD.get((channel or "").strip().lower())
+    if head and not re.search(head, _first_line(s) if channel.lower() != "free forex signals" else "\n".join(s.splitlines()[:3])):
         return None
     for fn in (_structured, _one_liner):
         r = fn(s)

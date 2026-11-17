@@ -103,7 +103,7 @@ class SignalBot:
         if key in self.seen:
             return "مكرر"
         self.seen.add(key)
-        sig = parse_signal(text)
+        sig = parse_signal(text, channel)
         if not sig:
             return "ليست توصية"
         def skip(reason):
