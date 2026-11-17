@@ -1,8 +1,7 @@
 """إدارة الصفقات المفتوحة يدوياً: أي مركز تفتحه أنت يُكتشف ويُدار وقفه المتحرك تلقائياً.
 
-القاعدة (بدون أهداف جاهزة): R = المسافة بين الدخول والوقف الأصلي.
-عند +1R يُنقل الوقف إلى الدخول+0.1R، وعند +kR (k≥2) إلى الدخول+(k-1)R. لا يرجع الوقف أبداً، ولا نغلق يدوياً،
-ولا نمس الهدف. مركز بلا وقف لا يمكن حساب R له فيُسجَّل ويُترك.
+القاعدة بالدولار (لكل 0.01 لوت، وتتناسب مع الحجم): عند ربح 5$ يُؤمَّن الدخول +1$، وعند 10$ يلحق الوقف السعر
+على بُعد 5$ من أعلى ربح. لا يرجع الوقف أبداً، ولا نغلق يدوياً، ولا نمس الهدف. مركز بلا وقف يُسجَّل ويُترك.
 """
 from . import manage
 
@@ -31,7 +30,8 @@ def normalize(p):
     sl = float(sl) if sl not in (None, 0, "0", "") else None
     if side is None or ticket is None:
         return None
-    return {"ticket": ticket, "symbol": p.get("symbol"), "side": side, "entry": entry, "sl": sl}
+    return {"ticket": ticket, "symbol": p.get("symbol"), "side": side, "entry": entry, "sl": sl,
+            "lots": _pick(p, "volume", "lots", "lot")}
 
 
 def target_stop(side, entry, sl0, best):
@@ -52,6 +52,17 @@ class ManualManager:
         self.ex, self.j = executor, journal
         self.state = journal.load_state().get("adopt", {})   # ticket -> {sl0, best, stop, since, ...}
         self.warned = set()
+
+    def _dollar_target(self, pos, st):
+        try:
+            lots = float(pos["lots"])
+            upp = self.ex.usd_per_price(pos["symbol"], lots)
+        except Exception as e:
+            if "spec" not in self.warned:
+                self.warned.add("spec")
+                self.j.event("error", where="adopt_spec", error=str(e))
+            return None
+        return manage.dollar_stop(pos["side"], st["entry"], st["best"], upp, lots)
 
     def tick(self, exclude, now_ts):
         seen = set()
@@ -79,7 +90,7 @@ class ManualManager:
                 st["best"] = max(st["best"], hi) if pos["side"] == "buy" else min(st["best"], lo)
             if last_ts:
                 st["since"] = last_ts
-            new = target_stop(pos["side"], st["entry"], st["sl0"], st["best"])
+            new = self._dollar_target(pos, st)
             if new is None or not manage.is_better_stop(pos["side"], st["stop"], new):
                 continue
             if close is not None and ((pos["side"] == "buy" and new >= close)

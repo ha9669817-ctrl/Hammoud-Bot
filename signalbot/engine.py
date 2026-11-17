@@ -140,6 +140,7 @@ class SignalBot:
         base = {"channel": channel, "msg": msg_id, "side": sig["side"], "kind": kind,
                 "entry": entry, "sl0": sig["sl"], "stop": sig["sl"], "tps": sig["tps"], "tp": tp,
                 "level": 0, "lots": lots, "risk_usd": risk_usd, "placed_at": _now(),
+                "best": entry, "usd_pp": (risk_usd / sl_dist) if sl_dist else 0,
                 "expire_ts": time.time() + manage.PENDING_HOURS * 3600}
         if kind == "pending":
             base.update(ticket=None, state="waiting")
@@ -171,9 +172,15 @@ class SignalBot:
                 self._finish_if_closed(tk, t)  # إن لم يظهر سجل الإغلاق ننتظر الدورة التالية
                 continue
             for hi, lo in bars:
+                t["best"] = max(t.get("best", t["entry"]), hi) if t["side"] == "buy" else min(t.get("best", t["entry"]), lo)
                 new_stop, lvl = manage.next_stop(t["side"], t["entry"], t["sl0"], t["tps"],
                                                  t["stop"], hi, lo, t["level"])
+                usd = manage.dollar_stop(t["side"], t["entry"], t["best"], t.get("usd_pp", 0), t["lots"])
+                if usd is not None and manage.is_better_stop(t["side"], new_stop, usd):
+                    new_stop = usd
                 if manage.is_better_stop(t["side"], t["stop"], new_stop):
+                    if not manage.stop_valid(t["side"], new_stop, price):
+                        continue  # السعر رجع خلف المستوى: ننتظر
                     try:
                         self.ex.modify_sl(ticket, new_stop)
                     except Exception as e:

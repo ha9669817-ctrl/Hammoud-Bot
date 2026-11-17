@@ -10,15 +10,14 @@ def _valid(side, lo, hi, sl, tps):
     if not all(GOLD_MIN < x < GOLD_MAX for x in ref):
         return False
     if side == "buy":
-        e = hi if hi is not None else None
-        if e is not None and not (sl < lo and tps[0] > hi):
+        if lo is not None and not (sl < lo and (not tps or tps[0] > hi)):
             return False
-        if e is None and not tps[0] > sl:
+        if lo is None and tps and not tps[0] > sl:
             return False
     else:
-        if lo is not None and not (sl > hi and tps[0] < lo):
+        if lo is not None and not (sl > hi and (not tps or tps[0] < lo)):
             return False
-        if lo is None and not tps[0] < sl:
+        if lo is None and tps and not tps[0] < sl:
             return False
     return True
 
@@ -43,8 +42,6 @@ def _structured(s):
     if not sl_m:
         return None
     tps = [float(x) for x in re.findall(r"(?<![A-Z])TP\s*\d*[^\d\n]*" + NUM, after)]
-    if not tps:
-        return None
     return side, min(e1, e2), max(e1, e2), float(sl_m.group(1)), tps
 
 
@@ -67,8 +64,6 @@ def _one_liner(s):
     if not sl_m:
         return None
     tps = [float(x) for x in re.findall(r"(?<![A-Z])TP\s*\d*[:\s]*" + NUM, s)]
-    if not tps:
-        return None
     return side, lo, hi, float(sl_m.group(1)), tps
 
 

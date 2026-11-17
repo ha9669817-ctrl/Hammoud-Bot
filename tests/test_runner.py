@@ -54,29 +54,30 @@ def test_target_stop_ladder():
 
 class MEx:
     def __init__(self):
-        self.pos = [{"ticket": 7, "symbol": "XAUUSDm", "side": "BUY", "openPrice": 100.0, "stopLoss": 90.0}]
+        self.pos = [{"ticket": 7, "symbol": "XAUUSDm", "side": "BUY", "openPrice": 100.0, "stopLoss": 90.0, "volume": 0.01}]
         self.mods, self.bars = [], ([], 1, 100.0)
 
     def positions_raw(self): return self.pos
+    def usd_per_price(self, sym, lots): return 100.0 * lots   # 0.01 لوت = 1$ لكل 1.0 حركة
     def bars_for(self, sym, since): return self.bars
     def modify_sl(self, t, sl): self.mods.append((t, sl))
 
 
 def test_manual_positions_adopted_and_trailed_many():
     ex = MEx()
-    ex.pos.append({"ticket": 8, "symbol": "XAUUSDm", "side": "SELL", "openPrice": 100.0, "stopLoss": 110.0})
-    ex.pos.append({"ticket": 9, "symbol": "XAUUSDm", "side": "BUY", "openPrice": 100.0})
+    ex.pos.append({"ticket": 8, "symbol": "XAUUSDm", "side": "SELL", "openPrice": 100.0, "stopLoss": 110.0, "volume": 0.01})
+    ex.pos.append({"ticket": 9, "symbol": "XAUUSDm", "side": "BUY", "openPrice": 100.0, "volume": 0.01})
     j = Journal(tempfile.mkdtemp())
     m = ManualManager(ex, j)
     m.tick(set(), 1)
     assert not ex.mods
     ex.bars = ([(111.0, 99.0)], 2, 108.0)
     m.tick(set(), 2)
-    assert (7, 101.0) in ex.mods and len(ex.mods) == 1
-    ex.pos[0]["stopLoss"] = 101.0
+    assert (7, 106.0) in ex.mods and len(ex.mods) == 1   # ربح 11$ ← وقف عند ربح 6$
+    ex.pos[0]["stopLoss"] = 106.0
     ex.bars = ([(104.0, 88.0)], 3, 92.0)
     m.tick(set(), 3)
-    assert any(t == 8 for t, _ in ex.mods)
+    assert (8, 93.0) in ex.mods                      # ربح 12$ ← وقف عند ربح 7$
     assert not any(t == 9 for t, _ in ex.mods)
     assert any(e.get("event") == "adopt_no_sl" for e in j.read("events.jsonl"))
 

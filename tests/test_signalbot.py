@@ -205,3 +205,33 @@ def test_real_channel_samples():
 def test_other_pairs_and_summaries_ignored():
     assert parse_signal("BUY EURUSD 👉 1.0850\nTP1 👉 1.0900\nSL 👉 1.0800", "Free Forex Signals") is None
     assert parse_signal("صفقات يوم الاثنين\nGold buy - SL 40pip❌\nGold sell - tp 88pip✅", "Liquidity Trader") is None
+
+
+def test_dollar_stop_levels_and_lot_scaling():
+    f = manage.dollar_stop
+    assert f("buy", 100, 104, 1.0, 0.01) is None            # ربح 4$ أقل من حد التأمين
+    assert f("buy", 100, 106, 1.0, 0.01) == 101             # 6$ ← الدخول + 1$
+    assert f("buy", 100, 112, 1.0, 0.01) == 107             # 12$ ← وقف عند ربح 7$ (5$ خلف السعر)
+    assert f("sell", 100, 85, 1.0, 0.01) == 90              # بيع: ربح 15$ ← وقف عند ربح 10$
+    assert f("buy", 100, 104, 2.0, 0.02) is None            # 0.02 لوت: ربح 8$ والعتبة صارت 10$
+    assert f("buy", 100, 105, 2.0, 0.02) == 101             # ربح 10$ ← تأمين الدخول + 2$
+
+
+def test_signal_without_targets_is_parsed_and_uses_dollar_trail():
+    sig = parse_signal("Gold buy now 4420-4422\nSL: 4408", "Master blue")
+    assert sig and sig["tps"] == [] and manage.final_target(sig) is None
+    bot, ex, _ = make()
+    assert bot.on_message("Master blue" if False else "A", 1, "Gold buy now 4420-4422\nSL: 4408", 4421).startswith("market")
+    t = next(iter(bot.trades.values()))
+    assert t["tp"] is None and t["usd_pp"] > 0
+    bot.tick([(4430, 4421)], dict(ex.live), 4429)           # ربح ~9$ ← تأمين الدخول+1$ (ليس 10$ بعد)
+    assert ex.modified and abs(ex.modified[-1][1] - (4421 + 1.0 * 1 / 1)) < 5
+    bot.tick([(4436, 4428)], dict(ex.live), 4435)           # ربح 15$ ← الوقف خلف أعلى سعر بـ5$
+    assert abs(ex.modified[-1][1] - (4436 - 5)) < 1.0
+
+
+def test_trail_not_set_on_wrong_side_of_price():
+    bot, ex, _ = make()
+    bot.on_message("A", 1, "Gold buy now 4420-4422\nSL: 4408", 4421)
+    bot.tick([(4436, 4420)], dict(ex.live), 4425)           # السعر رجع تحت الوقف المطلوب
+    assert not ex.modified

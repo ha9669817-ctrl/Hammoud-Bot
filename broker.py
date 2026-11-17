@@ -128,11 +128,12 @@ class TickerAllClient:
     def positions(self):
         return _items(self._acct("GET", "/positions"), "positions")
 
-    def open_market(self, symbol, side, volume, sl, tp):
-        return self._acct("POST", "/orders", {
-            "type": "market", "symbol": symbol, "side": "BUY" if side == "buy" else "SELL",
-            "volume": volume, "stopLoss": round(sl, 5), "takeProfit": round(tp, 5),
-            "comment": TA_COMMENT}, idem=True)
+    def open_market(self, symbol, side, volume, sl, tp=None):
+        body = {"type": "market", "symbol": symbol, "side": "BUY" if side == "buy" else "SELL",
+                "volume": volume, "stopLoss": round(sl, 5), "comment": TA_COMMENT}
+        if tp:
+            body["takeProfit"] = round(tp, 5)
+        return self._acct("POST", "/orders", body, idem=True)
 
     def closed_profit(self, ticket, since_iso):
         """الربح الفعلي لصفقة من سجل الوسيط، بمطابقة رقم التذكرة لا اسم الرمز.
@@ -275,6 +276,10 @@ class SignalExecutor:
 
     def closed_profit(self, ticket, since_iso):
         return self.client.closed_profit(ticket, since_iso)
+
+    def usd_per_price(self, symbol, lots):
+        """كم دولار يربح/يخسر المركز لكل 1.0 حركة في السعر."""
+        return _risk_per_lot(self.client.spec(symbol), 1.0) * float(lots)
 
     def positions_raw(self):
         return [p for p in self.client.positions() if isinstance(p, dict)]
