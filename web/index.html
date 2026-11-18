@@ -23,6 +23,28 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:6px 4px;b
 .ev .tx{flex:1;min-width:0}.ev .tt{font-weight:600}.ev .sub{color:var(--mut);font-size:13px}.ev .tm{color:var(--mut);font-size:12px;white-space:nowrap}
 .c-ok{background:var(--ok)}.c-bad{background:var(--bad)}.c-warn{background:var(--warn)}.c-acc{background:var(--acc)}.c-mut{background:#6b7785}
 .tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line)}
+
+/* ---------- حركة وتفاصيل ---------- */
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes slidein{from{opacity:0;transform:translateX(-18px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,185,80,.55)}70%{box-shadow:0 0 0 10px rgba(63,185,80,0)}100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}}
+@keyframes flash{0%{background:rgba(88,166,255,.28)}100%{background:var(--bg)}}
+@keyframes sweep{from{background-position:200% 0}to{background-position:-200% 0}}
+body>.card{animation:rise .5s ease both}
+body>.card:nth-of-type(2){animation-delay:.05s}body>.card:nth-of-type(3){animation-delay:.1s}body>.card:nth-of-type(4){animation-delay:.15s}
+body>.card:nth-of-type(5){animation-delay:.2s}body>.card:nth-of-type(6){animation-delay:.25s}
+.card{transition:transform .2s,border-color .2s}.card:hover{transform:translateY(-2px);border-color:var(--acc)}
+h1{background:linear-gradient(90deg,var(--acc),var(--ok),var(--acc));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sweep 8s linear infinite}
+h1 .mut{-webkit-text-fill-color:var(--mut)}
+button{transition:transform .12s,filter .2s}button:hover{filter:brightness(1.1)}button:active{transform:scale(.96)}
+.ev.new{animation:slidein .45s ease both,flash 1.6s ease .2s both}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-inline-end:8px;background:var(--mut)}
+.dot.on{background:var(--ok);animation:pulse 1.8s infinite}.dot.off{background:var(--bad)}.dot.wait{background:var(--warn);animation:pulse 1.2s infinite}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.chip{display:inline-flex;align-items:center;padding:4px 12px;border:1px solid var(--line);border-radius:999px;font-size:13px;background:var(--bg);animation:rise .4s ease both}
+.chip .dot{width:8px;height:8px;margin-inline-end:6px}
+.bal-up{color:var(--ok)}.bal-down{color:var(--bad)}.big{transition:color .6s}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 pre{white-space:pre-wrap;margin:0;font:13px/1.6 ui-monospace,monospace}
 .big{font-size:22px;font-weight:700}
 </style>
@@ -35,13 +57,13 @@ pre{white-space:pre-wrap;margin:0;font:13px/1.6 ui-monospace,monospace}
   <div class="row">
     <div><div class="mut">الرصيد</div><div class="big" id="bal">—</div></div>
     <div class="grow"></div>
-    <div><div class="mut">حالة البوت</div><div class="big" id="onoff">—</div></div>
+    <div><div class="mut">حالة البوت</div><div class="big"><span class="dot" id="live"></span><span id="onoff">—</span></div></div>
   </div>
   <div class="row" style="margin-top:10px">
     <input id="pw" type="password" placeholder="كلمة مرور الإدارة" style="max-width:240px">
     <button id="bOn">تشغيل</button><button id="bOff" class="off">إيقاف</button>
   </div>
-  <div class="mut" id="health" style="margin-top:8px"></div>
+  <div class="chips" id="chips"></div>
   <div class="bad" id="msg"></div>
 </div>
 
@@ -90,6 +112,15 @@ async function api(path,body){
 const MK={trend:"اتجاه نظيف",pullback:"تصحيح — يكمل",reversal:"انعكاس محتمل — تأمين"};
 const SD=x=>x==="buy"?"شراء":x==="sell"?"بيع":"";
 const when=a=>{const d=new Date(a);return isNaN(d)?"":d.toLocaleString("ar",{day:"numeric",month:"numeric",hour:"2-digit",minute:"2-digit"})};
+let BAL=null;
+function setBal(a){
+  const b=$("bal");
+  if(!a||a.balance==null){b.textContent=(a&&a.error)||"—";return}
+  const to=Number(a.balance),cur=a.currency||"";
+  if(BAL===null||BAL===to){b.textContent=to.toFixed(2)+" "+cur;BAL=to;return}
+  const from=BAL;BAL=to;b.className="big "+(to>from?"bal-up":"bal-down");
+  const t0=performance.now();(function f(t){const k=Math.min(1,(t-t0)/700);b.textContent=(from+(to-from)*k).toFixed(2)+" "+cur;if(k<1)requestAnimationFrame(f);else setTimeout(()=>b.className="big",1500)})(t0);
+}
 function describe(e){
   const ch=e.channel?"["+e.channel+"] ":"";
   switch(e.event){
@@ -107,13 +138,14 @@ function describe(e){
     case "decision":return["c-mut","·","رسالة "+ch,e.result||""];
   }return["c-mut","·",e.event,""];
 }
+const SEEN=new Set();let FIRST=true;
 function renderFeed(events){
   const chat=$("chat").checked,box=$("feed");box.replaceChildren();
   const rows=events.filter(e=>chat||e.event!=="decision"&&!(e.event==="adopt_no_sl")||e.event==="adopt_no_sl").slice(0,25);
   if(!rows.length){box.append(el("div","لا قرارات بعد — بانتظار توصية","mut"));return}
-  rows.forEach(e=>{const[c,ic,t,sub]=describe(e);const d=el("div",undefined,"ev");
+  rows.forEach(e=>{const[c,ic,t,sub]=describe(e);const key=e.at+"|"+e.event+"|"+(e.ticket||e.msg||"");const d=el("div",undefined,"ev"+(!FIRST&&!SEEN.has(key)?" new":""));SEEN.add(key);
     d.append(el("div",ic,"ic "+c));const tx=el("div",undefined,"tx");tx.append(el("div",t,"tt"));if(sub)tx.append(el("div",sub,"sub"));
-    d.append(tx,el("div",when(e.at),"tm"));box.append(d)});
+    d.append(tx,el("div",when(e.at),"tm"));box.append(d)});FIRST=false;
 }
 let LAST_EVENTS=[];$("chat").onchange=()=>renderFeed(LAST_EVENTS);
 const ar={adopt:"اكتشاف صفقة يدوية",adopt_no_sl:"صفقة بلا وقف",queued:"في الطابور",entry:"دخول",waiting:"انتظار منطقة",filled:"فُتحت من الانتظار",trail:"تحريك وقف",skip:"تجاهل",expired:"انتهت",channel_paused:"إيقاف قناة",error:"خطأ",decision:"قرار"};
@@ -121,14 +153,17 @@ async function refresh(){
   try{
     const s=await (await fetch("/api/state")).json();
     $("ver").textContent="· "+s.version;
-    $("bal").textContent=s.account&&s.account.balance!=null?Number(s.account.balance).toFixed(2)+" "+(s.account.currency||""):(s.account&&s.account.error)||"—";
+    setBal(s.account);
     const on=$("onoff");on.textContent=s.on?"يعمل":"متوقف";on.className="big "+(s.on?"ok":"bad");
-    const h=[];
-    h.push(s.mode_ready?"وضع التجريبي: مفعّل":"SIGNALBOT_MODE ليس demo: التنفيذ مقفل");
     const tg=s.telegram||{};
-    h.push("تيليجرام: "+(tg.running?"متصل":"غير متصل")+" ("+(tg.stage||"")+")"+(tg.error?" — "+tg.error:"")+(tg.missing&&tg.missing.length?" — حسابك ليس مشتركاً في: "+tg.missing.join("، "):"")+(tg.running?" · رسائل وصلت: "+(tg.received||0):""));
-    h.push("المتابعة: "+(s.runner?(s.runner.error?"خطأ "+s.runner.error:(s.runner.last_tick?"تعمل، آخر دورة "+s.runner.last_tick:"بدأت وتنتظر أول دورة")):"لم تبدأ"+(s.boot_error?" — "+s.boot_error:"")));
-    $("health").textContent=h.join(" · ");
+    $("live").className="dot "+(s.on?"on":"off");
+    const chips=[];
+    chips.push([s.mode_ready?"on":"off",s.mode_ready?"الوضع التجريبي مفعّل":"التنفيذ مقفل: SIGNALBOT_MODE ليس demo"]);
+    chips.push([tg.running?"on":(tg.error?"off":"wait"),"تيليجرام: "+(tg.running?"متصل · رسائل وصلت "+(tg.received||0):"غير متصل"+(tg.stage?" ("+tg.stage+")":"")+(tg.error?" — "+tg.error:"")+(tg.missing&&tg.missing.length?" — غير مشترك في: "+tg.missing.join("، "):""))]);
+    const rn=s.runner;
+    chips.push([!rn?"off":rn.error?"off":rn.last_tick?"on":"wait","المتابعة: "+(!rn?"لم تبدأ"+(s.boot_error?" — "+s.boot_error:""):rn.error?"خطأ "+rn.error:rn.last_tick?"تعمل كل ثانيتين":"بدأت وتنتظر أول دورة")]);
+    const box=$("chips");box.replaceChildren();
+    chips.forEach(([st,tx],i)=>{const c=el("span",undefined,"chip");c.style.animationDelay=(i*0.08)+"s";c.append(el("span","","dot "+st),document.createTextNode(tx));box.append(c)});
     const ch=$("mch");if(!ch.options.length)s.channels.forEach(c=>ch.append(new Option(c,c)));
     fill($("stats"),Object.entries(s.stats).map(([n,v])=>{
       const st=el("span",v.paused?"موقوفة: "+v.paused:"تعمل",v.paused?"bad":"ok");
