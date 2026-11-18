@@ -13,6 +13,7 @@ from signalbot.adopt import ManualManager
 from signalbot.engine import Journal, SignalBot
 from signalbot.parser import parse_signal
 from signalbot.runner import Runner
+from persist import Persist
 from store import Store
 from telegram_ingest import TelegramIngest, parse_channels
 
@@ -25,7 +26,7 @@ app = Flask(__name__)
 store = Store(DB_PATH)
 CHANNELS = parse_channels(os.getenv("TG_CHANNELS", ""))
 
-SB = {"bot": None, "runner": None, "tg": None, "error": None}
+SB = {"bot": None, "runner": None, "tg": None, "error": None, "persist": None}
 _BOOT_LOCK = threading.Lock()
 
 
@@ -49,6 +50,11 @@ def boot():
         if SB["bot"] is not None:
             return
         try:
+            if SB["persist"] is None:
+                pz = Persist.from_env(DATA_DIR / "signalbot", store)
+                pz.restore()          # قبل إنشاء البوت حتى يقرأ حالته المستعادة
+                pz.start()
+                SB["persist"] = pz
             executor = SignalExecutor(store)
             bot = SignalBot(Journal(DATA_DIR / "signalbot"), executor, CHANNELS.values(), is_enabled=is_on)
             runner = Runner(bot, executor, ManualManager(executor, bot.j))
@@ -102,6 +108,7 @@ def state():
         "account": _account() if os.getenv("DISABLE_SCHEDULER") != "1" else None,
         "runner": runner.state if runner else None,
         "telegram": tg.state if tg else {"running": False, "error": SB["error"] or "لم يبدأ بعد", "stage": "لم يبدأ"},
+        "persist": SB["persist"].state if SB["persist"] else {"enabled": False, "error": "لم يبدأ"},
         "version": (os.getenv("RENDER_GIT_COMMIT") or "")[:7] or "محلي",
         "stats": bot.channel_stats() if bot else {},
         "open": list(bot.trades.values()) if bot else [],

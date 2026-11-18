@@ -162,6 +162,8 @@ async function refresh(){
     chips.push([tg.running?"on":(tg.error?"off":"wait"),"تيليجرام: "+(tg.running?"متصل · رسائل وصلت "+(tg.received||0):"غير متصل"+(tg.stage?" ("+tg.stage+")":"")+(tg.error?" — "+tg.error:"")+(tg.missing&&tg.missing.length?" — غير مشترك في: "+tg.missing.join("، "):""))]);
     const rn=s.runner;
     chips.push([!rn?"off":rn.error?"off":rn.last_tick?"on":"wait","المتابعة: "+(!rn?"لم تبدأ"+(s.boot_error?" — "+s.boot_error:""):rn.error?"خطأ "+rn.error:rn.last_tick?"تعمل كل ثانيتين":"بدأت وتنتظر أول دورة")]);
+    const ps=s.persist||{};
+    chips.push([ps.enabled===false?"off":ps.error?"off":ps.last_sync?"on":"wait","التخزين الدائم: "+(ps.enabled===false?(ps.error||"معطّل"):ps.error?ps.error:ps.last_sync?"محفوظ على GitHub":"بانتظار أول حفظ")]);
     const box=$("chips");box.replaceChildren();
     chips.forEach(([st,tx],i)=>{const c=el("span",undefined,"chip");c.style.animationDelay=(i*0.08)+"s";c.append(el("span","","dot "+st),document.createTextNode(tx));box.append(c)});
     const ch=$("mch");if(!ch.options.length)s.channels.forEach(c=>ch.append(new Option(c,c)));
