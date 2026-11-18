@@ -57,12 +57,18 @@ def _persist_setup():
     SB["persist"] = pz
 
 
+def _log(msg):
+    print(f"[boot pid={os.getpid()}] {msg}", flush=True)
+
+
 def boot():
     """يشغّل البوت والاستقبال مرة واحدة. أي فشل يُحفظ ويظهر في اللوحة بدل أن يوقف الموقع."""
     with _BOOT_LOCK:
         if SB["bot"] is not None:
             return
         SB["thread"] = threading.get_ident()
+        SB["attempts"] = SB.get("attempts", 0) + 1
+        _log(f"بدء التشغيل (محاولة {SB['attempts']})")
         try:
             SB["stage"] = "التخزين الدائم"
             if SB["persist"] is None:
@@ -71,6 +77,7 @@ def boot():
                 except Exception as e:     # التخزين اختياري: فشله لا يمنع البوت
                     SB["persist"] = SB["persist"] or Persist("", "", "", DATA_DIR / "signalbot", store)
                     SB["persist"].state.update(enabled=False, error=f"{type(e).__name__}: {str(e)[:120]}")
+            _log("التخزين جاهز")
             SB["stage"] = "الاتصال بالوسيط"
             executor = SignalExecutor(store)
             SB["stage"] = "إنشاء البوت"
@@ -83,9 +90,22 @@ def boot():
             tg.start()
             SB["tg"] = tg
             SB["stage"] = "تعمل"
-        except Exception as e:
+            _log("اكتمل التشغيل")
+        except BaseException as e:      # حتى SystemExit: لا يموت الخيط بصمت
             SB["error"] = f"{type(e).__name__}: {str(e)[:200]}"
             SB["stage"] = "فشل: " + SB["stage"]
+            _log(SB["error"] + " @ " + SB["stage"])
+
+
+def _ensure_boot():
+    """إن مات خيط التشغيل قبل اكتمال البوت نعيد تشغيله (حد أقصى 5 محاولات)."""
+    if SB["bot"] is not None or SB.get("attempts", 0) >= 5:
+        return
+    ident = SB.get("thread")
+    alive = ident is not None and any(t.ident == ident for t in threading.enumerate())
+    if SB.get("attempts", 0) > 0 and not alive and not _BOOT_LOCK.locked():
+        _log("خيط التشغيل مات قبل الاكتمال؛ إعادة المحاولة")
+        threading.Thread(target=boot, daemon=True).start()
 
 
 def _stuck_where():
@@ -133,8 +153,12 @@ _account.cache = {"at": 0.0, "data": None}
 
 @app.get("/api/state")
 def state():
+    if os.getenv("DISABLE_SCHEDULER") != "1":
+        _ensure_boot()
     bot, runner, tg = SB["bot"], SB["runner"], SB["tg"]
     out = {
+        "pid": os.getpid(),
+        "boot_attempts": SB.get("attempts", 0),
         "on": is_on(),
         "mode_ready": os.getenv("SIGNALBOT_MODE", "").lower() == "demo",
         "boot_error": SB["error"],
