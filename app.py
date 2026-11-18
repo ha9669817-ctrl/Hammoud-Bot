@@ -26,7 +26,8 @@ app = Flask(__name__)
 store = Store(DB_PATH)
 CHANNELS = parse_channels(os.getenv("TG_CHANNELS", ""))
 
-SB = {"bot": None, "runner": None, "tg": None, "error": None, "persist": None}
+SB = {"bot": None, "runner": None, "tg": None, "error": None, "persist": None, "stage": "لم يبدأ", "thread": None}
+RESTORE_WAIT_S = 20   # أقصى انتظار لاستعادة السجل من GitHub؛ بعده يبدأ البوت بدونها
 _BOOT_LOCK = threading.Lock()
 
 
@@ -44,27 +45,60 @@ def _deny():
     return jsonify({"error": "كلمة المرور غير صحيحة"}), 401
 
 
+def _persist_setup():
+    """يجهّز التخزين الدائم دون أن يعطّل البوت: الاستعادة في خيط منفصل بمهلة."""
+    pz = Persist.from_env(DATA_DIR / "signalbot", store)
+    t = threading.Thread(target=pz.restore, daemon=True)
+    t.start()
+    t.join(RESTORE_WAIT_S)
+    if t.is_alive():
+        pz.state["error"] = f"الاستعادة لم تنتهِ خلال {RESTORE_WAIT_S} ثانية؛ بدأ البوت بدونها"
+    pz.start()
+    SB["persist"] = pz
+
+
 def boot():
     """يشغّل البوت والاستقبال مرة واحدة. أي فشل يُحفظ ويظهر في اللوحة بدل أن يوقف الموقع."""
     with _BOOT_LOCK:
         if SB["bot"] is not None:
             return
+        SB["thread"] = threading.get_ident()
         try:
+            SB["stage"] = "التخزين الدائم"
             if SB["persist"] is None:
-                pz = Persist.from_env(DATA_DIR / "signalbot", store)
-                pz.restore()          # قبل إنشاء البوت حتى يقرأ حالته المستعادة
-                pz.start()
-                SB["persist"] = pz
+                try:
+                    _persist_setup()
+                except Exception as e:     # التخزين اختياري: فشله لا يمنع البوت
+                    SB["persist"] = SB["persist"] or Persist("", "", "", DATA_DIR / "signalbot", store)
+                    SB["persist"].state.update(enabled=False, error=f"{type(e).__name__}: {str(e)[:120]}")
+            SB["stage"] = "الاتصال بالوسيط"
             executor = SignalExecutor(store)
+            SB["stage"] = "إنشاء البوت"
             bot = SignalBot(Journal(DATA_DIR / "signalbot"), executor, CHANNELS.values(), is_enabled=is_on)
             runner = Runner(bot, executor, ManualManager(executor, bot.j))
             runner.start()
-            SB.update(bot=bot, runner=runner, error=None)
+            SB.update(bot=bot, runner=runner, error=None, stage="تعمل")
+            SB["stage"] = "تيليجرام"
             tg = TelegramIngest(runner.push, CHANNELS)
             tg.start()
             SB["tg"] = tg
+            SB["stage"] = "تعمل"
         except Exception as e:
             SB["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+            SB["stage"] = "فشل: " + SB["stage"]
+
+
+def _stuck_where():
+    """إن علق خيط التشغيل: آخر أسطر مكدّسه (أين توقف بالضبط)."""
+    import sys
+    import traceback
+    ident = SB.get("thread")
+    if SB["bot"] is not None or ident is None:
+        return None
+    frame = sys._current_frames().get(ident)
+    if frame is None:
+        return None
+    return [ln.strip().replace("\n", " ")[:160] for ln in traceback.format_stack(frame)[-3:]]
 
 
 @app.get("/health")
@@ -104,6 +138,8 @@ def state():
         "on": is_on(),
         "mode_ready": os.getenv("SIGNALBOT_MODE", "").lower() == "demo",
         "boot_error": SB["error"],
+        "boot_stage": SB["stage"],
+        "boot_stuck": _stuck_where(),
         "channels": list(CHANNELS.values()),
         "account": _account() if os.getenv("DISABLE_SCHEDULER") != "1" else None,
         "runner": runner.state if runner else None,

@@ -67,3 +67,67 @@ def test_keepalive_noop_without_render_url(client, monkeypatch):
     import app as appmod
     monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
     assert appmod.keepalive_once() is False
+
+
+def test_boot_does_not_wait_for_hanging_persistence(client, monkeypatch):
+    import time as _t
+    import app as appmod
+
+    class FakePersist:
+        def __init__(self):
+            self.state = {"enabled": True, "error": None}
+        def restore(self):
+            _t.sleep(30)                         # يعلّق
+        def start(self):
+            pass
+
+    class FakeEx:
+        def __init__(self, store): pass
+
+    class FakeBot:
+        def __init__(self, *a, **k):
+            self.j = object()
+            self.trades = {}
+
+    class FakeRunner:
+        def __init__(self, *a, **k): self.state = {}
+        def start(self): pass
+        def push(self, *a): pass
+
+    class FakeTg:
+        def __init__(self, *a, **k): self.state = {}
+        def start(self): pass
+
+    monkeypatch.setattr(appmod, "RESTORE_WAIT_S", 0.2)
+    monkeypatch.setattr(appmod.Persist, "from_env", classmethod(lambda cls, f, s: FakePersist()))
+    monkeypatch.setattr(appmod, "SignalExecutor", FakeEx)
+    monkeypatch.setattr(appmod, "SignalBot", FakeBot)
+    monkeypatch.setattr(appmod, "Runner", FakeRunner)
+    monkeypatch.setattr(appmod, "ManualManager", lambda *a, **k: None)
+    monkeypatch.setattr(appmod, "TelegramIngest", FakeTg)
+    monkeypatch.setattr(appmod, "Journal", lambda p: object())
+    appmod.SB.update(bot=None, persist=None, error=None)
+    t0 = _t.time()
+    appmod.boot()
+    assert _t.time() - t0 < 5
+    assert appmod.SB["bot"] is not None and appmod.SB["stage"] == "تعمل"
+    assert "لم تنتهِ" in appmod.SB["persist"].state["error"]
+    appmod.SB.update(bot=None, persist=None)
+
+
+def test_stuck_where_reports_blocked_thread(client):
+    import threading
+    import time as _t
+    import app as appmod
+    ev = threading.Event()
+
+    def blocked():
+        appmod.SB["thread"] = threading.get_ident()
+        ev.wait(5)
+    appmod.SB.update(bot=None)
+    th = threading.Thread(target=blocked, daemon=True)
+    th.start()
+    _t.sleep(0.2)
+    where = appmod._stuck_where()
+    ev.set()
+    assert where and any("blocked" in ln or "wait" in ln for ln in where)
