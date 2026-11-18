@@ -17,6 +17,12 @@ button.off{background:var(--bad)}button.sec{background:transparent;color:var(--t
 input,select,textarea{background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;width:100%}
 textarea{min-height:90px}
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:start;vertical-align:top}
+#feed{display:flex;flex-direction:column;gap:8px}
+.ev{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.ev .ic{flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:15px;color:#fff}
+.ev .tx{flex:1;min-width:0}.ev .tt{font-weight:600}.ev .sub{color:var(--mut);font-size:13px}.ev .tm{color:var(--mut);font-size:12px;white-space:nowrap}
+.c-ok{background:var(--ok)}.c-bad{background:var(--bad)}.c-warn{background:var(--warn)}.c-acc{background:var(--acc)}.c-mut{background:#6b7785}
+.tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line)}
 pre{white-space:pre-wrap;margin:0;font:13px/1.6 ui-monospace,monospace}
 .big{font-size:22px;font-weight:700}
 </style>
@@ -46,7 +52,9 @@ pre{white-space:pre-wrap;margin:0;font:13px/1.6 ui-monospace,monospace}
 
 <div class="card"><h2>صفقات حالية</h2><table><tbody id="open"></tbody></table></div>
 
-<div class="card"><h2>آخر القرارات</h2><table><tbody id="events"></tbody></table></div>
+<div class="card"><div class="row"><h2 class="grow">سجل القرارات</h2>
+  <label class="mut"><input type="checkbox" id="chat" style="width:auto"> إظهار الرسائل العادية</label></div>
+  <div id="feed"></div></div>
 
 <div class="card"><h2>الصفقات المغلقة</h2><table><tbody id="trades"></tbody></table></div>
 
@@ -79,6 +87,35 @@ async function api(path,body){
   store.set("pw",$("pw").value);
   const r=await fetch(path,{method:body===undefined?"GET":"POST",headers:hdr(),body:body===undefined?undefined:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.status);return j}
+const MK={trend:"اتجاه نظيف",pullback:"تصحيح — يكمل",reversal:"انعكاس محتمل — تأمين"};
+const SD=x=>x==="buy"?"شراء":x==="sell"?"بيع":"";
+const when=a=>{const d=new Date(a);return isNaN(d)?"":d.toLocaleString("ar",{day:"numeric",month:"numeric",hour:"2-digit",minute:"2-digit"})};
+function describe(e){
+  const ch=e.channel?"["+e.channel+"] ":"";
+  switch(e.event){
+    case "entry":return["c-ok","▲","دخول "+SD(e.side)+" "+ch,"سعر "+e.entry+" · وقف "+e.sl+(e.tp?" · هدف "+e.tp:" · بلا هدف")];
+    case "waiting":return["c-acc","⏳","ينتظر المنطقة "+ch+SD(e.side),"حافة الدخول "+e.entry+" · وقف "+e.sl];
+    case "filled":return["c-ok","▲","فُتحت الصفقة المنتظِرة "+ch,"سعر المنطقة "+(e.entry||"")];
+    case "queued":return["c-acc","⋯","في الطابور "+ch+SD(e.side),"تنتظر إغلاق الصفقة الحالية"];
+    case "trail":{const st=e.state?MK[e.state]:"";return["c-warn","⇧",(e.manual?"وقف صفقة يدوية ":"تحريك الوقف ")+ch+SD(e.side),e.old+" ← "+e.new+(st?" · "+st:"")]}
+    case "skip":return["c-mut","⊘","تجاهل "+ch,e.reason||""];
+    case "expired":return["c-mut","⌛","انتهت صلاحية التوصية "+ch,e.reason||""];
+    case "channel_paused":return["c-bad","■","إيقاف قناة "+ch,e.reason||""];
+    case "adopt":return["c-acc","◎","اكتشاف صفقة يدوية "+SD(e.side),(e.symbol||"")+" · دخول "+e.entry+" · وقف "+e.sl];
+    case "adopt_no_sl":return["c-warn","!","صفقة يدوية بلا وقف","ضع لها وقفاً ليديرها البوت · تذكرة "+e.ticket];
+    case "error":return["c-bad","✕","خطأ: "+(e.where||""),e.error||""];
+    case "decision":return["c-mut","·","رسالة "+ch,e.result||""];
+  }return["c-mut","·",e.event,""];
+}
+function renderFeed(events){
+  const chat=$("chat").checked,box=$("feed");box.replaceChildren();
+  const rows=events.filter(e=>chat||e.event!=="decision"&&!(e.event==="adopt_no_sl")||e.event==="adopt_no_sl").slice(0,25);
+  if(!rows.length){box.append(el("div","لا قرارات بعد — بانتظار توصية","mut"));return}
+  rows.forEach(e=>{const[c,ic,t,sub]=describe(e);const d=el("div",undefined,"ev");
+    d.append(el("div",ic,"ic "+c));const tx=el("div",undefined,"tx");tx.append(el("div",t,"tt"));if(sub)tx.append(el("div",sub,"sub"));
+    d.append(tx,el("div",when(e.at),"tm"));box.append(d)});
+}
+let LAST_EVENTS=[];$("chat").onchange=()=>renderFeed(LAST_EVENTS);
 const ar={adopt:"اكتشاف صفقة يدوية",adopt_no_sl:"صفقة بلا وقف",queued:"في الطابور",entry:"دخول",waiting:"انتظار منطقة",filled:"فُتحت من الانتظار",trail:"تحريك وقف",skip:"تجاهل",expired:"انتهت",channel_paused:"إيقاف قناة",error:"خطأ",decision:"قرار"};
 async function refresh(){
   try{
@@ -98,8 +135,8 @@ async function refresh(){
       const cell=el("span");cell.append(st);
       if(v.paused){const b=el("button","استئناف","sec");b.onclick=()=>api("/api/signalbot/resume",{channel:n}).then(refresh).catch(e=>$("msg").textContent=e.message);cell.append(" ",b)}
       return [n,v.trades,v.sum_r,v.avg_r==null?"—":v.avg_r,cell]}));
-    fill($("open"),s.open.map(t=>t.state==="queued"?[t.channel,t.sig.side==="buy"?"شراء":"بيع","في الطابور","",""]:[t.channel,t.side==="buy"?"شراء":"بيع",t.state==="waiting"?"ينتظر "+t.entry:"دخول "+t.entry,"وقف "+t.stop,"مستوى "+t.level]));
-    fill($("events"),s.events.slice(0,15).map(e=>[(e.at||"").replace("T"," ").slice(5,16),ar[e.event]||e.event,e.channel||"",e.reason||e.result||e.error||(e.new?"وقف→"+e.new:"")||""]));
+    fill($("open"),s.open.map(t=>t.state==="queued"?[t.channel,t.sig.side==="buy"?"شراء":"بيع","في الطابور","",""]:[t.channel,t.side==="buy"?"شراء":"بيع",t.state==="waiting"?"ينتظر "+t.entry:"دخول "+t.entry,"وقف "+t.stop,MK[t.market]||"—"]));
+    LAST_EVENTS=s.events;renderFeed(LAST_EVENTS);
     fill($("trades"),s.trades.map(t=>[(t.closed_at||"").slice(5,16),t.channel,t.side==="buy"?"شراء":"بيع",el("span",(t.profit>0?"+":"")+t.profit+"$ ("+t.r+"R)",t.profit>0?"ok":"bad")]));
     $("lessons").textContent=s.lessons||"لا دروس بعد";
   }catch(e){$("msg").textContent="تعذّر تحديث البيانات: "+e.message}

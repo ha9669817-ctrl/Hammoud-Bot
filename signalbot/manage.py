@@ -5,7 +5,7 @@
 PENDING_HOURS = 6
 MAX_SL_DIST = 60.0
 LOCK_R = 0.10              # بعد TP1 يُنقل الوقف إلى الدخول + 0.1R (ربح صغير مضمون)
-FINAL_TP_INDEX = 2         # الهدف النهائي TP3
+# الهدف النهائي = آخر هدف في التوصية؛ الوقف المتحرك يؤمّن ما قبله تدريجياً
 
 
 MIN_SL_ROOM = 1.0          # أقل مسافة بين سعر الدخول والوقف كي نقبل الدخول الفوري
@@ -41,7 +41,7 @@ def plan_entry(sig: dict, price: float, chase: bool = False):
 def final_target(sig: dict):
     """الهدف النهائي، أو None إن لم تحدد التوصية أهدافاً (يُغلق الوقف المتحرك الصفقة وحده)."""
     tps = sig["tps"]
-    return tps[min(FINAL_TP_INDEX, len(tps) - 1)] if tps else None
+    return tps[-1] if tps else None
 
 
 def next_stop(side: str, entry: float, sl0: float, tps: list, current_stop: float,
@@ -49,7 +49,7 @@ def next_stop(side: str, entry: float, sl0: float, tps: list, current_stop: floa
     """يحسب الوقف الجديد بعد شمعة (high/low). يعيد (stop, level) ولا يتراجع أبداً."""
     risk = abs(entry - sl0)
     stop = current_stop
-    n = min(len(tps), FINAL_TP_INDEX + 1)
+    n = len(tps)
     for k in range(n):
         reached = high >= tps[k] if side == "buy" else low <= tps[k]
         if not reached or k + 1 <= level:
@@ -77,8 +77,9 @@ USD_GAP = 5.0      # ويبقى بعيداً عن أعلى ربح وصلته ا�
 MIN_LOT = 0.01
 
 
-def dollar_stop(side: str, entry: float, best: float, usd_per_price: float, lots: float):
-    """الوقف المطلوب لأفضل سعر وصلته الصفقة، أو None قبل بلوغ حد التأمين."""
+def dollar_stop(side: str, entry: float, best: float, usd_per_price: float, lots: float, trail: bool = True):
+    """الوقف المطلوب لأفضل سعر وصلته الصفقة، أو None قبل بلوغ حد التأمين.
+    trail=False: تأمين الدخول فقط (+1$) دون الملاحقة؛ الملاحقة عندئذ للتحليل الهيكلي."""
     if not usd_per_price or usd_per_price <= 0 or not lots:
         return None
     k = max(lots, MIN_LOT) / MIN_LOT
@@ -86,7 +87,7 @@ def dollar_stop(side: str, entry: float, best: float, usd_per_price: float, lots
     profit = gain * usd_per_price
     if profit < USD_ARM * k:
         return None
-    lock = profit - USD_GAP * k if profit >= USD_START * k else USD_BE_LOCK * k
+    lock = profit - USD_GAP * k if (trail and profit >= USD_START * k) else USD_BE_LOCK * k
     dist = lock / usd_per_price
     return entry + dist if side == "buy" else entry - dist
 
@@ -96,3 +97,20 @@ def stop_valid(side: str, stop: float, price) -> bool:
     if price is None:
         return True
     return stop < price if side == "buy" else stop > price
+
+
+def smart_stop(side, entry, best, usd_per_price, lots, bars):
+    """وقف ذكي بعد ربح 10$: يعتمد هيكل M5 (تصحيح/اتجاه ← واسع، انعكاس ← ضيق). يعيد (stop, state) أو (None, None)."""
+    from . import structure
+    if not usd_per_price or not lots or not bars:
+        return None, None
+    k = max(lots, MIN_LOT) / MIN_LOT
+    gain = (best - entry) if side == "buy" else (entry - best)
+    if gain * usd_per_price < USD_START * k:
+        return None, None
+    a = structure.analyze(side, entry, best, bars)
+    if not a:
+        return None, None
+    floor = entry + (USD_BE_LOCK * k / usd_per_price) * (1 if side == "buy" else -1)
+    stop = max(a["stop"], floor) if side == "buy" else min(a["stop"], floor)
+    return stop, a["state"]

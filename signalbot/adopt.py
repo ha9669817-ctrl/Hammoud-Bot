@@ -62,7 +62,19 @@ class ManualManager:
                 self.warned.add("spec")
                 self.j.event("error", where="adopt_spec", error=str(e))
             return None
-        return manage.dollar_stop(pos["side"], st["entry"], st["best"], upp, lots)
+        sb = None
+        fn = getattr(self.ex, "structure_bars", None)
+        if fn is not None:
+            try:
+                sb = fn(pos["symbol"]) or None
+            except Exception as e:
+                self.j.event("error", where="adopt_structure", error=str(e))
+        smart, state = manage.smart_stop(pos["side"], st["entry"], st["best"], upp, lots, sb)
+        st["market"] = state
+        base = manage.dollar_stop(pos["side"], st["entry"], st["best"], upp, lots, trail=sb is None)
+        if smart is not None and (base is None or manage.is_better_stop(pos["side"], base, smart)):
+            return smart
+        return base
 
     def tick(self, exclude, now_ts):
         seen = set()
@@ -101,7 +113,7 @@ class ManualManager:
             except Exception as e:
                 self.j.event("error", where="adopt_modify", ticket=pos["ticket"], error=str(e))
                 continue
-            self.j.event("trail", ticket=pos["ticket"], old=st["stop"], new=new, manual=True)
+            self.j.event("trail", ticket=pos["ticket"], old=st["stop"], new=new, manual=True, state=st.get("market"), side=pos["side"])
             st["stop"] = new
         for tk in list(self.state):
             if tk not in seen and tk not in exclude:

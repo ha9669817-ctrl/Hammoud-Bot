@@ -105,7 +105,7 @@ def state():
         "version": (os.getenv("RENDER_GIT_COMMIT") or "")[:7] or "محلي",
         "stats": bot.channel_stats() if bot else {},
         "open": list(bot.trades.values()) if bot else [],
-        "events": bot.j.read("events.jsonl", last=40)[::-1] if bot else [],
+        "events": bot.j.read("events.jsonl", last=150)[::-1] if bot else [],
         "trades": bot.j.read("trades.jsonl", last=30)[::-1] if bot else [],
         "lessons": bot.j.lessons_text(25) if bot else "",
     }

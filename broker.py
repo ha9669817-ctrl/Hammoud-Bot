@@ -289,10 +289,34 @@ class SignalExecutor:
         """كم دولار يربح/يخسر المركز لكل 1.0 حركة في السعر."""
         return _risk_per_lot(self._spec(symbol), 1.0) * float(lots)
 
+    def structure_bars(self, symbol=None, tf="M5", count=60):
+        """(high, low, close) لآخر شموع M5 (الأقدم أولاً، والأخيرة جارية). ذاكرة 15 ثانية لتخفيف الطلبات."""
+        symbol = symbol or self.symbol
+        cache = self.__dict__.setdefault("_struct_cache", {})
+        hit = cache.get(symbol)
+        if hit and time.time() - hit[0] < 15:
+            return hit[1]
+        now = datetime.now(timezone.utc)
+        mins = count * 5 + 5
+        data = self.client._acct("GET", "/candles", params={
+            "symbol": symbol, "timeframe": tf, "count": count,
+            "from": (now - timedelta(minutes=mins)).isoformat(), "to": now.isoformat()})
+        rows = []
+        for c in _items(data, "candles", "data", "items", "bars"):
+            if not isinstance(c, dict) or c.get("open") is None:
+                continue
+            t = _ts_any(c.get("time") or c.get("timestamp") or c.get("open_time") or c.get("t"))
+            if t is not None:
+                rows.append((t.timestamp(), float(c["high"]), float(c["low"]), float(c["close"])))
+        rows.sort()
+        out = [(h, l, c) for _, h, l, c in rows][-count:]
+        cache[symbol] = (time.time(), out)
+        return out
+
     def positions_raw(self):
         """قائمة المراكز مع ذاكرة قصيرة (ثانيتان) حتى لا نكرر الطلب في الدورة الواحدة."""
         c = getattr(self, "_pos_cache", None)
-        if c and time.time() - c[0] < 2.0:
+        if c and time.time() - c[0] < 1.5:
             return c[1]
         data = [p for p in self.client.positions() if isinstance(p, dict)]
         self._pos_cache = (time.time(), data)

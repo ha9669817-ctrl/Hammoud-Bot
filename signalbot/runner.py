@@ -3,7 +3,7 @@ import queue
 import threading
 import time
 
-TICK_S = 3          # فحص كل 3 ثوانٍ
+TICK_S = 2          # فحص كل ثانيتين
 ERROR_WAIT_S = 10   # بعد خطأ (مثلاً تقييد الوسيط للطلبات) ننتظر أطول
 
 

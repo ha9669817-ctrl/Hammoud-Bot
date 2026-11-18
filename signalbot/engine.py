@@ -120,7 +120,7 @@ class SignalBot:
             self.trades["q:" + key] = {"state": "queued", "channel": channel, "msg": msg_id, "sig": sig,
                                        "ticket": None, "touched": touched,
                                        "expire_ts": time.time() + manage.PENDING_HOURS * 3600}
-            self.j.event("queued", channel=channel, msg=msg_id, signal=sig)
+            self.j.event("queued", channel=channel, msg=msg_id, side=sig["side"], signal=sig)
             self._save()
             return "في الطابور: توجد صفقة مفتوحة"
         return self._start(channel, msg_id, key, sig, price, skip)
@@ -143,7 +143,7 @@ class SignalBot:
         if kind == "pending":
             base.update(ticket=None, state="waiting")
             self.trades["w:" + key] = base
-            self.j.event("waiting", channel=channel, msg=msg_id, entry=entry, sl=sig["sl"], tp=tp)
+            self.j.event("waiting", channel=channel, msg=msg_id, side=sig["side"], entry=entry, sl=sig["sl"], tp=tp)
         else:
             try:
                 ticket = self.ex.place(sig["side"], sig["sl"], tp, lots)
@@ -151,7 +151,7 @@ class SignalBot:
                 return skip(f"رفض الوسيط: {e}")
             base.update(ticket=ticket, state="open")
             self.trades[str(ticket)] = base
-            self.j.event("entry", channel=channel, msg=msg_id, ticket=ticket, entry=entry,
+            self.j.event("entry", channel=channel, msg=msg_id, ticket=ticket, side=sig["side"], entry=entry,
                          sl=sig["sl"], tp=tp, lots=lots, risk_usd=risk_usd)
         self._save()
         return f"{kind} {sig['side']} @ {entry}"
@@ -172,11 +172,13 @@ class SignalBot:
             if (live.get(ticket) or live.get(str(ticket))) is None:
                 self._finish_if_closed(tk, t)  # إن لم يظهر سجل الإغلاق ننتظر الدورة التالية
                 continue
+            sb = self._structure_bars()
             for hi, lo in bars:
                 t["best"] = max(t.get("best", t["entry"]), hi) if t["side"] == "buy" else min(t.get("best", t["entry"]), lo)
                 new_stop, lvl = manage.next_stop(t["side"], t["entry"], t["sl0"], t["tps"],
                                                  t["stop"], hi, lo, t["level"])
-                usd = manage.dollar_stop(t["side"], t["entry"], t["best"], t.get("usd_pp", 0), t["lots"])
+                usd = manage.dollar_stop(t["side"], t["entry"], t["best"], t.get("usd_pp", 0), t["lots"],
+                                         trail=sb is None)
                 if usd is not None and manage.is_better_stop(t["side"], new_stop, usd):
                     new_stop = usd
                 if manage.is_better_stop(t["side"], t["stop"], new_stop):
@@ -187,11 +189,40 @@ class SignalBot:
                     except Exception as e:
                         self.j.event("error", where="modify_sl", ticket=ticket, error=str(e))
                         break  # لا نتقدّم في المستوى إن فشل التعديل: نعيد المحاولة بالدورة التالية
-                    self.j.event("trail", ticket=ticket, old=t["stop"], new=new_stop, level=lvl)
+                    self.j.event("trail", ticket=ticket, old=t["stop"], new=new_stop, level=lvl, side=t["side"], channel=t["channel"])
                     t["stop"] = new_stop
                 t["level"] = lvl
+            self._smart_trail(t, sb, price)
         self._drain_queue(price)
         self._save()
+
+    def _structure_bars(self):
+        fn = getattr(self.ex, "structure_bars", None)
+        if fn is None:
+            return None
+        try:
+            return fn() or None
+        except Exception as e:
+            self.j.event("error", where="structure_bars", error=str(e))
+            return None
+
+    def _smart_trail(self, t, sb, price):
+        """بعد ربح 10$: وقف هيكلي (واسع في التصحيح، ضيق عند الانعكاس) ولا يتراجع أبداً."""
+        if not sb:
+            return
+        new, state = manage.smart_stop(t["side"], t["entry"], t.get("best", t["entry"]), t.get("usd_pp", 0), t["lots"], sb)
+        t["market"] = state
+        if new is None or not manage.is_better_stop(t["side"], t["stop"], new):
+            return
+        if not manage.stop_valid(t["side"], new, price):
+            return
+        try:
+            self.ex.modify_sl(t["ticket"], new)
+        except Exception as e:
+            self.j.event("error", where="smart_modify", ticket=t["ticket"], error=str(e))
+            return
+        self.j.event("trail", ticket=t["ticket"], old=t["stop"], new=new, state=state, side=t["side"], channel=t["channel"])
+        t["stop"] = new
 
     def _drain_queue(self, price):
         """عند خلو الصفقات المفتوحة: أقدم توصية منتظرة تُقيَّم بسعر الآن (الأقدم أولاً)."""

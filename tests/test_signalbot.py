@@ -277,3 +277,51 @@ def test_queued_signal_waits_if_price_never_touched_zone():
     ex.live.clear(); ex.profit = 3.0
     bot.tick([], {}, 4435)
     assert not ex.live and any(t["state"] == "waiting" for t in bot.trades.values())
+
+
+from signalbot import structure
+
+
+def _uptrend(n=40, base=4000.0):
+    """صعود منتظم بقيعان واضحة: كل شمعة أعلى من سابقتها بقليل."""
+    bars = []
+    for i in range(n):
+        lo = base + i * 1.0 + (0.0 if i % 4 else -0.8)
+        bars.append((lo + 2.0, lo, lo + 1.5))
+    return bars
+
+
+def test_structure_pullback_keeps_wide_stop_and_reversal_tightens():
+    bars = _uptrend()
+    best = max(h for h, _, _ in bars)
+    a = structure.analyze("buy", 4000, best, bars)
+    assert a["state"] in ("trend", "pullback") and a["stop"] <= best - structure.ROOM_MIN * a["atr"] + 1e-9
+    # انعكاس: آخر شمعة تكسر القاع المؤكد بقوة
+    swing = a["swing"]
+    broken = bars[:-1] + [(swing + 1, swing - 3.0, swing - 2.5)]
+    r = structure.analyze("buy", 4000, best, broken)
+    assert r["state"] == "reversal" and r["stop"] > a["stop"]          # أضيق من حالة التصحيح
+
+
+def test_structure_sell_mirrors_buy_and_short_history_is_none():
+    bars = [(h, l, c) for h, l, c in _uptrend()]
+    mirrored = [(-l, -h, -c) for h, l, c in bars]
+    b = structure.analyze("buy", 4000, max(h for h, _, _ in bars), bars)
+    s = structure.analyze("sell", -4000, min(l for _, l, _ in mirrored), mirrored)
+    assert s["state"] == b["state"] and abs(s["stop"] + b["stop"]) < 1e-6
+    assert structure.analyze("buy", 4000, 4010, bars[:10]) is None
+
+
+def test_smart_stop_only_after_ten_dollars_and_respects_floor():
+    bars = _uptrend()
+    best = max(h for h, _, _ in bars)
+    assert manage.smart_stop("buy", best - 6, best, 1.0, 0.01, bars) == (None, None)   # ربح 6$ فقط
+    stop, state = manage.smart_stop("buy", best - 20, best, 1.0, 0.01, bars)
+    assert state and stop >= (best - 20) + 1.0 and stop < best
+
+
+def test_last_target_is_final_and_ladder_covers_all_targets():
+    sig = {"tps": [4053, 4058, 4063, 4068, 4073]}
+    assert manage.final_target(sig) == 4073
+    stop, lvl = manage.next_stop("buy", 4040, 4033, sig["tps"], 4033, 4069, 4041, 0)
+    assert lvl == 4 and stop == 4063                                  # بلغ TP4 ← الوقف عند TP3
