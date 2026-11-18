@@ -126,8 +126,22 @@ def test_stuck_where_reports_blocked_thread(client):
         ev.wait(5)
     appmod.SB.update(bot=None)
     th = threading.Thread(target=blocked, daemon=True)
+    appmod.SB["boot_thread"] = th
     th.start()
     _t.sleep(0.2)
     where = appmod._stuck_where()
     ev.set()
     assert where and any("blocked" in ln or "wait" in ln for ln in where)
+
+
+def test_ensure_started_restarts_after_fork(monkeypatch):
+    """بعد fork تبقى SB من الأب بلا خيوط: يجب أن يبدأ التشغيل من جديد في العملية الحالية."""
+    import app as A
+    monkeypatch.delenv("DISABLE_SCHEDULER", raising=False)
+    started = []
+    monkeypatch.setattr(A, "boot", lambda: started.append(1))
+    monkeypatch.setattr(A, "_keepalive_loop", lambda: None)
+    A.SB.update(pid=-1, bot=None, stage="التخزين الدائم")
+    A.ensure_started()
+    A.SB["boot_thread"].join(2)
+    assert started == [1] and A.SB["pid"] == __import__("os").getpid() and A.SB["stage"] == "لم يبدأ"

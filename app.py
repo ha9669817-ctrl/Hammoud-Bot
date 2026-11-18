@@ -97,15 +97,35 @@ def boot():
             _log(SB["error"] + " @ " + SB["stage"])
 
 
-def _ensure_boot():
-    """إن مات خيط التشغيل قبل اكتمال البوت نعيد تشغيله (حد أقصى 5 محاولات)."""
-    if SB["bot"] is not None or SB.get("attempts", 0) >= 5:
+_START_LOCK = threading.Lock()
+
+
+def ensure_started():
+    """يبدأ البوت داخل العملية التي تخدم الطلبات (وليس عند الاستيراد: الخيوط لا تنجو من fork).
+    إن تغيّرت العملية أو مات خيط التشغيل قبل الاكتمال نعيد المحاولة (حد أقصى 5)."""
+    if os.getenv("DISABLE_SCHEDULER") == "1":
         return
-    ident = SB.get("thread")
-    alive = ident is not None and any(t.ident == ident for t in threading.enumerate())
-    if SB.get("attempts", 0) > 0 and not alive and not _BOOT_LOCK.locked():
-        _log("خيط التشغيل مات قبل الاكتمال؛ إعادة المحاولة")
-        threading.Thread(target=boot, daemon=True).start()
+    with _START_LOCK:
+        pid = os.getpid()
+        if SB.get("pid") != pid:
+            global _BOOT_LOCK
+            _BOOT_LOCK = threading.Lock()      # قفل موروث من عملية أب قد يكون مقفولاً
+            SB.update(bot=None, runner=None, tg=None, error=None, persist=None, stage="لم يبدأ",
+                      thread=None, attempts=0, pid=pid, boot_thread=None)
+            _log("عملية جديدة: بدء الخيوط")
+            threading.Thread(target=_keepalive_loop, daemon=True).start()
+        bt = SB.get("boot_thread")
+        if SB["bot"] is None and SB["attempts"] < 5 and (bt is None or not bt.is_alive()):
+            if bt is not None:
+                _log("خيط التشغيل مات قبل الاكتمال؛ إعادة المحاولة")
+            bt = threading.Thread(target=boot, daemon=True)
+            SB["boot_thread"] = bt
+            bt.start()
+
+
+@app.before_request
+def _before():
+    ensure_started()
 
 
 def _stuck_where():
@@ -113,7 +133,8 @@ def _stuck_where():
     import sys
     import traceback
     ident = SB.get("thread")
-    if SB["bot"] is not None or ident is None:
+    bt = SB.get("boot_thread")
+    if SB["bot"] is not None or ident is None or bt is None or not bt.is_alive():
         return None
     frame = sys._current_frames().get(ident)
     if frame is None:
@@ -153,8 +174,6 @@ _account.cache = {"at": 0.0, "data": None}
 
 @app.get("/api/state")
 def state():
-    if os.getenv("DISABLE_SCHEDULER") != "1":
-        _ensure_boot()
     bot, runner, tg = SB["bot"], SB["runner"], SB["tg"]
     out = {
         "pid": os.getpid(),
@@ -290,9 +309,3 @@ def _keepalive_loop():
     while True:
         time.sleep(KEEPALIVE_S)
         keepalive_once()
-
-
-if os.getenv("DISABLE_SCHEDULER") != "1":
-    # يُشغَّل بعد استيراد الوحدة حتى لا يؤخر استجابة /health
-    threading.Thread(target=boot, daemon=True).start()
-    threading.Thread(target=_keepalive_loop, daemon=True).start()
