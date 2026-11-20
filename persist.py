@@ -16,7 +16,7 @@ import requests
 
 API = "https://api.github.com"
 FILES = ["events.jsonl", "trades.jsonl", "lessons.md", "state.json"]
-META_KEYS = ["signalbot_on", "ta_modify_variant"]
+META_KEYS = ["signalbot_on", "ta_modify_variant", "analyst_on"]
 SYNC_EVERY_S = 60
 MAX_LOCAL_BYTES = 2_000_000
 

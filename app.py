@@ -13,6 +13,7 @@ from signalbot.adopt import ManualManager
 from signalbot.engine import Journal, SignalBot
 from signalbot.parser import parse_signal
 from signalbot.runner import Runner
+from strategy.live import Analyst
 from persist import Persist
 from store import Store
 from telegram_ingest import TelegramIngest, parse_channels
@@ -33,6 +34,10 @@ _BOOT_LOCK = threading.Lock()
 
 def is_on() -> bool:
     return bool(store.meta_get("signalbot_on", False))
+
+
+def analyst_on() -> bool:
+    return bool(store.meta_get("analyst_on", True))
 
 
 def _authorized() -> bool:
@@ -82,7 +87,9 @@ def boot():
             executor = SignalExecutor(store)
             SB["stage"] = "إنشاء البوت"
             bot = SignalBot(Journal(DATA_DIR / "signalbot"), executor, CHANNELS.values(), is_enabled=is_on)
-            runner = Runner(bot, executor, ManualManager(executor, bot.j))
+            analyst = Analyst(executor, bot.j, is_on, analyst_on)
+            SB["analyst"] = analyst
+            runner = Runner(bot, executor, ManualManager(executor, bot.j), analyst)
             runner.start()
             SB.update(bot=bot, runner=runner, error=None, stage="تعمل")
             SB["stage"] = "تيليجرام"
@@ -111,7 +118,7 @@ def ensure_started():
             global _BOOT_LOCK
             _BOOT_LOCK = threading.Lock()      # قفل موروث من عملية أب قد يكون مقفولاً
             SB.update(bot=None, runner=None, tg=None, error=None, persist=None, stage="لم يبدأ",
-                      thread=None, attempts=0, pid=pid, boot_thread=None)
+                      thread=None, attempts=0, pid=pid, boot_thread=None, analyst=None)
             _log("عملية جديدة: بدء الخيوط")
             threading.Thread(target=_keepalive_loop, daemon=True).start()
         bt = SB.get("boot_thread")
@@ -186,6 +193,7 @@ def state():
         "channels": list(CHANNELS.values()),
         "account": _account() if os.getenv("DISABLE_SCHEDULER") != "1" else None,
         "runner": runner.state if runner else None,
+        "analyst": {**SB["analyst"].state, "on": analyst_on()} if SB.get("analyst") else {"on": analyst_on(), "decision": "لم يبدأ"},
         "telegram": tg.state if tg else {"running": False, "error": SB["error"] or "لم يبدأ بعد", "stage": "لم يبدأ"},
         "persist": SB["persist"].state if SB["persist"] else {"enabled": False, "error": "لم يبدأ"},
         "version": (os.getenv("RENDER_GIT_COMMIT") or "")[:7] or "محلي",
@@ -209,6 +217,14 @@ def toggle():
     if on:
         boot()
     return jsonify({"ok": True, "on": on, "boot_error": SB["error"]})
+
+
+@app.post("/api/analyst/toggle")
+def analyst_toggle():
+    if not _authorized():
+        return _deny()
+    store.meta_set("analyst_on", bool((request.get_json(silent=True) or {}).get("on")))
+    return jsonify({"ok": True, "on": analyst_on()})
 
 
 @app.post("/api/signalbot/resume")

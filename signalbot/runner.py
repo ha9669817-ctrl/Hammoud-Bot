@@ -8,8 +8,8 @@ ERROR_WAIT_S = 10   # بعد خطأ (مثلاً تقييد الوسيط للطل
 
 
 class Runner:
-    def __init__(self, bot, executor, manual=None):
-        self.bot, self.ex, self.manual = bot, executor, manual
+    def __init__(self, bot, executor, manual=None, analyst=None):
+        self.bot, self.ex, self.manual, self.analyst = bot, executor, manual, analyst
         self.inbox = queue.Queue()
         self.price = None
         self.state = {"alive": False, "last_tick": None, "error": None}
@@ -50,6 +50,8 @@ class Runner:
         if self.manual is not None and self.bot.is_enabled():
             own = {str(t["ticket"]) for t in self.bot.trades.values() if t.get("ticket") is not None}
             self.manual.tick(own, time.time())
+        if self.analyst is not None:
+            self.analyst.tick()      # معزول: أخطاؤه تُسجَّل داخله ولا توقف الدورة
 
     def _loop(self):
         self.state["alive"] = True

@@ -72,6 +72,12 @@ pre{white-space:pre-wrap;margin:0;font:13px/1.6 ui-monospace,monospace}
   <div class="mut" style="margin-top:6px">التعلّم: القناة التي تخسر فعلياً (آخر 15 صفقة بمجموع سالب بعد 8 صفقات) تُوقف تلقائياً. هذا حماية وليس صناعة ربح.</div>
 </div>
 
+<div class="card"><div class="row"><h2 class="grow">المحلّل (فريمات متعددة، باتجاه السوق فقط)</h2>
+  <button id="aOn" class="sec">تشغيل</button><button id="aOff" class="off">إيقاف</button></div>
+  <div class="chips" id="achips"></div>
+  <div class="mut" style="margin-top:6px">يدخل فقط حين يتفق اتجاه H4 وH1 وM15 ويحدث اختراق قمة/قاع 4 ساعات مع ADX≥20، بأصغر لوت ووقف 3×ATR، ثم يُدار وقفه تلقائياً. اختباره التاريخي إيجابي لكنه ليس ضمان ربح.</div>
+</div>
+
 <div class="card"><h2>صفقات حالية</h2><table><tbody id="open"></tbody></table></div>
 
 <div class="card"><div class="row"><h2 class="grow">سجل القرارات</h2>
@@ -148,7 +154,7 @@ function renderFeed(events){
     d.append(tx,el("div",when(e.at),"tm"));box.append(d)});FIRST=false;
 }
 let LAST_EVENTS=[];$("chat").onchange=()=>renderFeed(LAST_EVENTS);
-const ar={adopt:"اكتشاف صفقة يدوية",adopt_no_sl:"صفقة بلا وقف",queued:"في الطابور",entry:"دخول",waiting:"انتظار منطقة",filled:"فُتحت من الانتظار",trail:"تحريك وقف",skip:"تجاهل",expired:"انتهت",channel_paused:"إيقاف قناة",error:"خطأ",decision:"قرار"};
+const ar={adopt:"اكتشاف صفقة يدوية",adopt_no_sl:"صفقة بلا وقف",queued:"في الطابور",entry:"دخول",waiting:"انتظار منطقة",filled:"فُتحت من الانتظار",trail:"تحريك وقف",skip:"تجاهل",expired:"انتهت",channel_paused:"إيقاف قناة",error:"خطأ",decision:"قرار",analyst_entry:"دخول المحلّل",orphan:"صفقة اختفت من الوسيط (حُرّر مكانها)"};
 async function refresh(){
   try{
     const s=await (await fetch("/api/state")).json();
@@ -164,6 +170,11 @@ async function refresh(){
     chips.push([!rn?"off":rn.error?"off":rn.last_tick?"on":"wait","المتابعة: "+(!rn?"لم تبدأ — المرحلة: "+(s.boot_stage||"؟")+(s.boot_error?" — "+s.boot_error:"")+(s.boot_stuck?" — عالق عند: "+s.boot_stuck.join(" ‹ "):""):rn.error?"خطأ "+rn.error:rn.last_tick?"تعمل كل ثانيتين":"بدأت وتنتظر أول دورة")]);
     const ps=s.persist||{};
     chips.push([ps.enabled===false?"off":ps.error?"off":ps.last_sync?"on":"wait","التخزين الدائم: "+(ps.enabled===false?(ps.error||"معطّل"):ps.error?ps.error:ps.last_sync?"محفوظ على GitHub":"بانتظار أول حفظ")]);
+    const an=s.analyst||{},tr=an.trend||{},arr=v=>v==null?"؟":v>0?"↑":v<0?"↓":"•";
+    const ab=$("achips");ab.replaceChildren();
+    [[an.on?(an.error?"off":an.running?"on":"wait"):"off","المحلّل: "+(an.on?(an.error?"خطأ "+an.error:an.decision||"—"):"متوقف")],
+     ["wait","الاتجاه H4 "+arr(tr.h4)+" · H1 "+arr(tr.h1)+" · M15 "+arr(tr.m15)+" · ADX "+(tr.adx==null?"؟":tr.adx)],
+     ["wait","دخل "+(an.entries||0)+" مرة"+(an.last_check?" · آخر فحص "+an.last_check+" UTC":"")]].forEach(([st,tx],i)=>{const c=el("span",undefined,"chip");c.append(el("span","","dot "+st),document.createTextNode(tx));ab.append(c)});
     const box=$("chips");box.replaceChildren();
     chips.forEach(([st,tx],i)=>{const c=el("span",undefined,"chip");c.style.animationDelay=(i*0.08)+"s";c.append(el("span","","dot "+st),document.createTextNode(tx));box.append(c)});
     const ch=$("mch");if(!ch.options.length)s.channels.forEach(c=>ch.append(new Option(c,c)));
@@ -179,6 +190,8 @@ async function refresh(){
   }catch(e){$("msg").textContent="تعذّر تحديث البيانات: "+e.message}
 }
 async function toggle(on){$("msg").textContent="";try{await api("/api/signalbot/toggle",{on});refresh()}catch(e){$("msg").textContent=e.message}}
+async function atoggle(on){$("msg").textContent="";try{await api("/api/analyst/toggle",{on});refresh()}catch(e){$("msg").textContent=e.message}}
+$("aOn").onclick=()=>atoggle(true);$("aOff").onclick=()=>atoggle(false);
 $("bOn").onclick=()=>toggle(true);$("bOff").onclick=()=>toggle(false);
 $("mgo").onclick=async()=>{try{const r=await api("/api/signalbot/message",{channel:$("mch").value,text:$("mtext").value,dry:$("dry").checked});$("mres").textContent=r.note+(r.parsed?" — "+JSON.stringify(r.parsed):"");refresh()}catch(e){$("mres").textContent=e.message}};
 $("hgo").onclick=async()=>{try{await api("/api/history/start",{symbols:$("hsym").value,days:+$("hdays").value,intervals:[...document.querySelectorAll(".tf:checked")].map(x=>x.value)});hst()}catch(e){$("hst").textContent=e.message}};

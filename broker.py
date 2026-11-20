@@ -289,6 +289,24 @@ class SignalExecutor:
         """كم دولار يربح/يخسر المركز لكل 1.0 حركة في السعر."""
         return _risk_per_lot(self._spec(symbol), 1.0) * float(lots)
 
+    def candle_rows(self, tf, count, symbol=None):
+        """[(epoch, open, high, low, close)] الأقدم أولاً، آخرها الشمعة الجارية. للتحليل متعدد الفريمات."""
+        symbol = symbol or self.symbol
+        mins = {"M5": 5, "M15": 15, "H1": 60, "H4": 240}[tf]
+        now = datetime.now(timezone.utc)
+        data = self.client._acct("GET", "/candles", params={
+            "symbol": symbol, "timeframe": tf, "count": count,
+            "from": (now - timedelta(minutes=int(count * mins * 1.8) + 60)).isoformat(), "to": now.isoformat()})
+        rows = []
+        for c in _items(data, "candles", "data", "items", "bars"):
+            if not isinstance(c, dict) or c.get("open") is None:
+                continue
+            t = _ts_any(c.get("time") or c.get("timestamp") or c.get("open_time") or c.get("t"))
+            if t is not None:
+                rows.append((t.timestamp(), float(c["open"]), float(c["high"]), float(c["low"]), float(c["close"])))
+        rows.sort()
+        return rows[-count:]
+
     def structure_bars(self, symbol=None, tf="M5", count=80):
         """(high, low, close) لآخر شموع M5 (الأقدم أولاً، والأخيرة جارية). ذاكرة 15 ثانية لتخفيف الطلبات."""
         symbol = symbol or self.symbol
