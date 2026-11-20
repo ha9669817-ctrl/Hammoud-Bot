@@ -111,3 +111,31 @@ def test_trail_continues_by_dollars_when_structure_bars_are_too_few():
     ex.bars = ([(127.0, 110.0)], 4, 111.0)           # نزل السعر: لا يتراجع الوقف
     m.tick(set(), 4)
     assert ex.mods[-1] == (7, 123.0)
+
+
+def _flat_bars(n=60, price=100.0, rng=3.0):
+    """شموع هادئة ATR≈3 تكفي للتحليل الهيكلي."""
+    return [(price + rng / 2, price - rng / 2, price)] * n
+
+
+def test_smart_stop_never_gives_back_more_than_40_percent_of_best_profit():
+    """الخلل الحقيقي: ATR كبير يبعد الوقف الذكي عشرات الدولارات فيبقى الوقف عند الدخول+1$ رغم ربح 25–30$."""
+    from signalbot import manage
+    big_atr = [(100.0 + 4 * (i % 2) + 6, 100.0 + 4 * (i % 2) - 6, 100.0) for i in range(60)]   # ATR≈12
+    for gain in (10.5, 18.0, 28.0):
+        stop, state = manage.smart_stop("buy", 100.0, 100.0 + gain, 1.0, 0.01, big_atr)
+        assert stop >= 100.0 + 0.6 * gain - 1e-9, (gain, stop)
+        stop_s, _ = manage.smart_stop("sell", 100.0, 100.0 - gain, 1.0, 0.01, big_atr)
+        assert stop_s <= 100.0 - 0.6 * gain + 1e-9
+
+
+def test_trade_that_ran_28_dollars_is_not_stopped_at_plus_one():
+    ex = MEx()
+    ex.structure_bars = lambda sym=None: [(106.0, 94.0, 100.0)] * 60           # ATR≈12: هيكلياً الوقف بعيد جداً
+    j = Journal(tempfile.mkdtemp())
+    m = ManualManager(ex, j)
+    m.tick(set(), 1)
+    ex.bars = ([(106.0, 99.0)], 2, 105.0); m.tick(set(), 2)
+    ex.pos[0]["stopLoss"] = ex.mods[-1][1]
+    ex.bars = ([(128.0, 104.0)], 3, 127.0); m.tick(set(), 3)
+    assert ex.mods[-1][1] >= 100.0 + 0.6 * 28 - 1e-9                          # ≥ +16.8$ لا +1$

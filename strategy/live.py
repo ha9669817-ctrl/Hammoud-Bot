@@ -25,8 +25,9 @@ def _frame(rows):
 
 
 class Analyst:
-    def __init__(self, executor, journal, is_enabled, own_on=lambda: True, now=time.time):
+    def __init__(self, executor, journal, is_enabled, own_on=lambda: True, now=time.time, symbol=""):
         self.ex, self.j, self.is_enabled, self.own_on, self.now = executor, journal, is_enabled, own_on, now
+        self.symbol = (symbol or "").strip()
         self.state = {"running": False, "error": None, "last_check": None, "last_bar": None,
                       "trend": None, "decision": "لم يبدأ", "entries": 0}
         self.ticket, self.last_bar_ts, self._last_run, self._cool_until = None, None, 0.0, 0.0
@@ -36,6 +37,12 @@ class Analyst:
         if t - self._last_run < CHECK_EVERY_S:
             return
         self._last_run = t
+        if not self.symbol:
+            self.state.update(running=False, decision="لم يُحدَّد رمز (ANALYST_SYMBOL): لا يدخل شيئاً")
+            return
+        if "XAU" in self.symbol.upper() or "GOLD" in self.symbol.upper():
+            self.state.update(running=False, error="ممنوع: المحلّل غير مربوط بالذهب")
+            return
         if not (self.is_enabled() and self.own_on()):
             self.state.update(running=False, decision="متوقف")
             return
@@ -49,7 +56,7 @@ class Analyst:
     def _frames(self):
         out = {}
         for tf, n in NEED.items():
-            rows = self.ex.candle_rows(tf, n)
+            rows = self.ex.candle_rows(tf, n, self.symbol)
             if len(rows) < MIN_BARS[tf]:
                 raise RuntimeError(f"شموع {tf} غير كافية ({len(rows)}/{MIN_BARS[tf]})")
             out[tf] = _frame(rows)
@@ -57,7 +64,8 @@ class Analyst:
 
     def _step(self, t):
         if self.ticket is not None:
-            if self.ticket in self.ex.open_tickets() or str(self.ticket) in {str(k) for k in self.ex.open_tickets()}:
+            live = {str(k) for k in self.ex.open_tickets_for(self.symbol)}
+            if str(self.ticket) in live:
                 self.state["decision"] = f"صفقة مفتوحة #{self.ticket}: الوقف يُدار تلقائياً"
                 return
             self.ticket, self._cool_until = None, t + COOLDOWN_S
@@ -84,9 +92,9 @@ class Analyst:
         dist = min(dist, MAX_SL)
         price = float(d["close"].iloc[-1])
         sl = price - dist if side == "buy" else price + dist
-        lots, risk_usd, _ = self.ex.size(dist)
-        self.ticket = self.ex.place(side, round(sl, 3), None, lots)
+        self.ticket = self.ex.place_for(self.symbol, side, round(sl, 5))
+        lots = None
         self.state.update(entries=self.state["entries"] + 1,
                           decision=f"دخل {side} عند ~{price:.2f} وقف {sl:.2f}")
-        self.j.event("analyst_entry", ticket=self.ticket, side=side, price=price, sl=sl, lots=lots,
+        self.j.event("analyst_entry", ticket=self.ticket, symbol=self.symbol, side=side, price=price, sl=sl,
                      trend=tr, atr=round(float(r["atr"]), 2))

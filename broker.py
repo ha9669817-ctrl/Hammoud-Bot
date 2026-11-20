@@ -275,6 +275,23 @@ class SignalExecutor:
             raise TickerAllError(502, "NO_TICKET", f"الرد بلا رقم تذكرة: {str(res)[:120]}")
         return ticket
 
+    def min_lot(self, symbol):
+        spec = self._spec(symbol)
+        step = float(spec.get("volumeStep") or spec.get("volume_step") or 0.01)
+        return float(spec.get("volumeMin") or spec.get("volume_min") or step)
+
+    def place_for(self, symbol, side, sl, tp=None):
+        """دخول سوق على رمز محدّد بأصغر لوت له (للمحلّل: رمز غير الذهب)."""
+        res = self.client.open_market(symbol, side, self.min_lot(symbol), sl, tp)
+        ticket = (res or {}).get("ticket")
+        if ticket is None:
+            raise TickerAllError(502, "NO_TICKET", f"الرد بلا رقم تذكرة: {str(res)[:120]}")
+        return ticket
+
+    def open_tickets_for(self, symbol):
+        return {p.get("ticket"): "open" for p in self.positions_raw()
+                if p.get("symbol") == symbol and p.get("ticket") is not None}
+
     def modify_sl(self, ticket, sl):
         _modify_position(self.client, ticket, sl)
 

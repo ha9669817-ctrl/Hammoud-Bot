@@ -47,15 +47,14 @@ class Ex:
     def __init__(self, m5):
         self.m5, self.placed, self.live = m5, [], {}
 
-    def candle_rows(self, tf, n):
+    def candle_rows(self, tf, n, symbol=None):
         rule = {"M5": None, "M15": "15min", "H1": "1h", "H4": "4h"}[tf]
         df = self.m5 if rule is None else ind.resample(self.m5, rule)
         return [(t.timestamp(), r.open, r.high, r.low, r.close) for t, r in df.tail(n).iterrows()]
 
-    def open_tickets(self): return dict(self.live)
-    def size(self, dist): return 0.01, dist, 20.0
-    def place(self, side, sl, tp, lots):
-        self.placed.append((side, sl, tp, lots)); self.live[7] = "open"; return 7
+    def open_tickets_for(self, symbol): return dict(self.live)
+    def place_for(self, symbol, side, sl, tp=None):
+        self.placed.append((side, sl, tp, symbol)); self.live[7] = "open"; return 7
 
 
 def test_analyst_enters_once_with_trend_and_no_tp():
@@ -63,7 +62,7 @@ def test_analyst_enters_once_with_trend_and_no_tp():
     i, dec = _first_signal(full)
     m5 = full.iloc[: i + 2]                       # الشمعة i مكتملة وبعدها جارية
     ex = Ex(m5)
-    a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda: True, lambda: True, now=lambda: 1000.0)
+    a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda: True, lambda: True, now=lambda: 1000.0, symbol="EURUSDm")
     a.tick()
     assert len(ex.placed) == 1 and ex.placed[0][0] == "buy" and ex.placed[0][2] is None and ex.placed[0][1] < m5["close"].iloc[-1]
     a._last_run = 0; a.now = lambda: 1100.0
@@ -76,10 +75,20 @@ def test_analyst_off_or_main_off_does_nothing_and_errors_are_isolated():
     i, _ = _first_signal(full)
     ex = Ex(full.iloc[: i + 2])
     for en, own in ((False, True), (True, False)):
-        a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda en=en: en, lambda own=own: own, now=lambda: 500.0)
+        a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda en=en: en, lambda own=own: own, now=lambda: 500.0, symbol="EURUSDm")
         a.tick()
         assert not ex.placed
-    ex.candle_rows = lambda tf, n: []             # الوسيط لا يعيد شموعاً
-    a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda: True, lambda: True, now=lambda: 900.0)
+    ex.candle_rows = lambda tf, n, symbol=None: []             # الوسيط لا يعيد شموعاً
+    a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda: True, lambda: True, now=lambda: 900.0, symbol="EURUSDm")
     a.tick()
     assert a.state["error"] and not ex.placed
+
+
+def test_analyst_refuses_gold_and_does_nothing_without_symbol():
+    full = _market(0.08)
+    i, _ = _first_signal(full)
+    ex = Ex(full.iloc[: i + 2])
+    for sym in ("XAUUSDm", "GOLD", ""):
+        a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda: True, lambda: True, now=lambda: 500.0, symbol=sym)
+        a.tick()
+        assert not ex.placed

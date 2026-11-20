@@ -37,7 +37,7 @@ def is_on() -> bool:
 
 
 def analyst_on() -> bool:
-    return bool(store.meta_get("analyst_on", True))
+    return bool(store.meta_get("analyst_on", False))
 
 
 def _authorized() -> bool:
@@ -87,7 +87,7 @@ def boot():
             executor = SignalExecutor(store)
             SB["stage"] = "إنشاء البوت"
             bot = SignalBot(Journal(DATA_DIR / "signalbot"), executor, CHANNELS.values(), is_enabled=is_on)
-            analyst = Analyst(executor, bot.j, is_on, analyst_on)
+            analyst = Analyst(executor, bot.j, is_on, analyst_on, symbol=os.getenv("ANALYST_SYMBOL", ""))
             SB["analyst"] = analyst
             runner = Runner(bot, executor, ManualManager(executor, bot.j), analyst)
             runner.start()

@@ -8,6 +8,7 @@ LOCK_R = 0.10              # بعد TP1 يُنقل الوقف إلى الدخو�
 # الهدف النهائي = آخر هدف في التوصية؛ الوقف المتحرك يؤمّن ما قبله تدريجياً
 
 
+KEEP_FRAC = 0.6   # بعد ربح 10$ يُؤمَّن 60% من أعلى ربح على الأقل (10$ ← +6$، 28$ ← +16.8$)
 MIN_SL_ROOM = 1.0          # أقل مسافة بين سعر الدخول والوقف كي نقبل الدخول الفوري
 
 
@@ -111,6 +112,10 @@ def smart_stop(side, entry, best, usd_per_price, lots, bars):
     a = structure.analyze(side, entry, best, bars)
     if not a:
         return None, None
-    floor = entry + (USD_BE_LOCK * k / usd_per_price) * (1 if side == "buy" else -1)
-    stop = max(a["stop"], floor) if side == "buy" else min(a["stop"], floor)
-    return stop, a["state"]
+    sign = 1 if side == "buy" else -1
+    floor = entry + (USD_BE_LOCK * k / usd_per_price) * sign
+    # سقف التراجع: الوقف الهيكلي يتسع مع ATR (على ذهب متقلب قد يكون 20$+ خلف القمة فلا يتحرك شيء بين +5 و+25).
+    # لذلك لا نسمح بأن يتنازل الوقف عن أكثر من (1-KEEP) من أعلى ربح بلغته الصفقة.
+    keep = entry + KEEP_FRAC * gain * sign
+    best_stop = max(a["stop"], floor, keep) if side == "buy" else min(a["stop"], floor, keep)
+    return best_stop, a["state"]

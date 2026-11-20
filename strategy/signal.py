@@ -10,7 +10,7 @@ from . import indicators as ind
 
 DEFAULTS = dict(adx_min=20.0, rsi_buy=45.0, rsi_sell=55.0, atr_sl=1.5, min_atr=0.8, max_atr=6.0)
 # الإعداد المعتمد للاختراق (الأوسط من شبكة الاختبار، وليس الأفضل في التدريب لتفادي التحيّز)
-LIVE = dict(mode="breakout", adx_min=20.0, atr_sl=3.0, max_atr=9.0)
+LIVE = dict(mode="breakout", adx_min=20.0, atr_sl=3.0, min_atr=0.0, max_atr=1e9)   # حدود ATR المطلقة خاصة بالذهب: لا تُستعمل على رموز أخرى
 
 
 def _trend(df_tf, fast, slow):
