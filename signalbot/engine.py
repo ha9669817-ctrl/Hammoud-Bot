@@ -10,7 +10,10 @@ from pathlib import Path
 from . import manage, structure
 from .parser import parse_signal
 
-MAX_OPEN = 1              # صفقة واحدة مفتوحة فقط؛ الباقي ينتظر في الطابور ولا يُهمل
+import os
+# بلا طابور: كل توصية تُقيَّم لحظة وصولها وتدخل بالتوازي. الحد الأقصى للصفقات المفتوحة معاً (قابل للتغيير من Render)
+MAX_OPEN = max(1, int(os.getenv("SIGNALBOT_MAX_OPEN", "5") or 5))
+ORPHAN_AFTER_S = 600      # صفقة اختفت من الوسيط ولم يظهر لها سجل إغلاق خلال 10 دقائق: تُغلق في السجل ولا تحجز مكاناً
 PAUSE_MIN_TRADES = 8      # أقل عدد صفقات مغلقة قبل الحكم على القناة
 PAUSE_WINDOW = 15         # نافذة آخر صفقات للحكم
 
@@ -115,14 +118,7 @@ class SignalBot:
         if channel in self.paused:
             return skip("القناة موقوفة: " + self.paused[channel])
         if self._open_count() >= MAX_OPEN:
-            # لا نهمل التوصية: تنتظر في الطابور حتى تُغلق الصفقة الحالية ثم تُقيَّم بسعر ذلك الوقت
-            touched = manage.plan_entry(sig, price)[0] == "market"
-            self.trades["q:" + key] = {"state": "queued", "channel": channel, "msg": msg_id, "sig": sig,
-                                       "ticket": None, "touched": touched,
-                                       "expire_ts": time.time() + manage.PENDING_HOURS * 3600}
-            self.j.event("queued", channel=channel, msg=msg_id, side=sig["side"], signal=sig)
-            self._save()
-            return "في الطابور: توجد صفقة مفتوحة"
+            return skip(f"بلغ حد الصفقات المتزامنة ({MAX_OPEN})")
         return self._start(channel, msg_id, key, sig, price, skip)
 
     def _open_count(self):
@@ -269,9 +265,19 @@ class SignalBot:
         self.j.event("filled", ticket=ticket, channel=t["channel"], entry=t["entry"])
 
     def _finish_if_closed(self, tk, t):
-        profit = self.ex.closed_profit(t["ticket"], t["placed_at"])
+        try:
+            profit = self.ex.closed_profit(t["ticket"], t["placed_at"])
+        except Exception as e:        # فشل سجل الوسيط لا يجوز أن يعطّل متابعة بقية الصفقات
+            self.j.event("error", where="closed_profit", ticket=t["ticket"], error=str(e)[:120])
+            profit = None
         if profit is None:
-            return False  # لم يظهر سجل الإغلاق بعد؛ ننتظر
+            gone = t.setdefault("gone_since", time.time())
+            if time.time() - gone < ORPHAN_AFTER_S:
+                return False  # لم يظهر سجل الإغلاق بعد؛ ننتظر قليلاً
+            self.j.event("orphan", ticket=t["ticket"], channel=t["channel"],
+                         note="اختفت من الوسيط بلا سجل إغلاق؛ أُزيلت من القائمة وحُرّر مكانها")
+            del self.trades[tk]
+            return True
         r = profit / t["risk_usd"] if t["risk_usd"] else 0.0
         rec = {"ticket": t["ticket"], "channel": t["channel"], "side": t["side"], "entry": t["entry"],
                "sl0": t["sl0"], "last_stop": t["stop"], "level": t["level"], "profit": profit,

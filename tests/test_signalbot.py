@@ -119,26 +119,40 @@ def test_far_price_waits_and_tiny_account_still_trades():
     assert r.startswith("market") and len(ex2.live) == 1                # حساب 20$ يدخل بأصغر لوت
 
 
-def test_second_signal_is_queued_then_taken_when_free():
+def test_second_signal_enters_in_parallel_without_queue():
     bot, ex, _ = make()
     bot.on_message("A", 1, STRUCT, 4040)
-    assert "الطابور" in bot.on_message("A", 2, MASTER, 4421)
-    assert len(ex.live) == 1
-    bot.tick([], dict(ex.live), 4421)          # ما زالت الأولى مفتوحة: الطابور ينتظر
-    assert len(ex.live) == 1
-    ex.live.clear(); ex.profit = 3.0
-    bot.tick([], {}, 4421)                     # أُغلقت الأولى ← تُفتح الثانية
-    assert len(ex.live) == 1 and bot.j.read("trades.jsonl")
+    r = bot.on_message("A", 2, MASTER, 4421)            # سعر داخل منطقتها: تدخل فوراً بالتوازي
+    assert r.startswith("market") and len(ex.live) == 2
+    assert not any(t["state"] == "queued" for t in bot.trades.values())
 
 
-def test_queued_signal_becomes_waiting_if_price_not_at_zone():
+def test_signal_far_from_price_becomes_waiting_while_other_is_open():
     bot, ex, _ = make()
     bot.on_message("A", 1, STRUCT, 4040)
-    bot.on_message("A", 2, MASTER, 4430)       # وقت وصولها السعر فوق المنطقة ولم يلمسها
-    ex.live.clear(); ex.profit = 3.0
-    bot.tick([], {}, 4600)                     # السعر فوق منطقة الشراء: تنتظر الرجوع إليها
-    assert not ex.live
-    assert any(t["state"] == "waiting" for t in bot.trades.values())
+    assert bot.on_message("A", 2, MASTER, 4430).startswith("pending")
+    assert len(ex.live) == 1 and any(t["state"] == "waiting" for t in bot.trades.values())
+
+
+def test_cap_skips_instead_of_queueing(monkeypatch):
+    from signalbot import engine
+    monkeypatch.setattr(engine, "MAX_OPEN", 1)
+    bot, ex, _ = make()
+    bot.on_message("A", 1, STRUCT, 4040)
+    r = bot.on_message("A", 2, MASTER, 4421)
+    assert "تجاهل" in r and len(ex.live) == 1
+    assert not any(t["state"] == "queued" for t in bot.trades.values())
+
+
+def test_ghost_trade_without_close_record_is_released(monkeypatch):
+    """صفقة اختفت من الوسيط بلا سجل إغلاق كانت تحجز المكان للأبد وتضيّع كل التوصيات."""
+    from signalbot import engine
+    monkeypatch.setattr(engine, "ORPHAN_AFTER_S", 0)
+    bot, ex, _ = make()
+    bot.on_message("A", 1, STRUCT, 4040)
+    ex.live.clear(); ex.profit = None
+    bot.tick([], {}, 4040); bot.tick([], {}, 4040)
+    assert not bot.trades and any(e.get("event") == "orphan" for e in bot.j.read("events.jsonl"))
 
 
 def test_modify_failure_is_retried_next_tick():
@@ -257,26 +271,6 @@ def test_same_price_distances_for_every_lot_size():
         assert abs(f("buy", 4000, 4005, upp, lots) - 4001) < 1e-9
         assert abs(f("buy", 4000, 4012, upp, lots) - 4007) < 1e-9
         assert abs(f("sell", 4000, 3985, upp, lots) - 3990) < 1e-9
-
-
-def test_queued_signal_chases_if_price_touched_zone_then_left():
-    bot, ex, _ = make()
-    bot.on_message("A", 1, STRUCT, 4040)
-    bot.on_message("A", 2, MASTER, 4430)                    # شراء 4420-4422 والسعر فوقها: لم يصل بعد
-    bot.tick([(4432, 4419)], dict(ex.live), 4425)           # أثناء الانتظار لمس المنطقة
-    ex.live.clear(); ex.profit = 3.0
-    bot.tick([], {}, 4435)                                  # أُغلقت الأولى والسعر ابتعد لأعلى
-    assert len(ex.live) == 1                                # يلحقه فوراً بسعر السوق
-
-
-def test_queued_signal_waits_if_price_never_touched_zone():
-    bot, ex, _ = make()
-    bot.on_message("A", 1, STRUCT, 4040)
-    bot.on_message("A", 2, MASTER, 4430)
-    bot.tick([(4440, 4428)], dict(ex.live), 4435)           # لم تلمس المنطقة
-    ex.live.clear(); ex.profit = 3.0
-    bot.tick([], {}, 4435)
-    assert not ex.live and any(t["state"] == "waiting" for t in bot.trades.values())
 
 
 from signalbot import structure
