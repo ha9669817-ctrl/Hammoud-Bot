@@ -16,6 +16,11 @@ SWING_BUFFER = 0.3     # تحت القاع بـ0.3 ATR
 TIGHT = 0.7            # عند الانعكاس نقترب إلى 0.7 ATR
 
 
+def usable(bars):
+    """هل الشموع كافية للتحليل الهيكلي؟ وإلا تعمل الملاحقة بالدولار بدلاً منه (لا فراغ بينهما)."""
+    return bool(bars) and len(bars) >= MIN_BARS
+
+
 def atr(bars, n=ATR_N):
     if len(bars) < n + 1:
         return None

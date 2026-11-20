@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import manage
+from . import manage, structure
 from .parser import parse_signal
 
 MAX_OPEN = 1              # صفقة واحدة مفتوحة فقط؛ الباقي ينتظر في الطابور ولا يُهمل
@@ -178,7 +178,7 @@ class SignalBot:
                 new_stop, lvl = manage.next_stop(t["side"], t["entry"], t["sl0"], t["tps"],
                                                  t["stop"], hi, lo, t["level"])
                 usd = manage.dollar_stop(t["side"], t["entry"], t["best"], t.get("usd_pp", 0), t["lots"],
-                                         trail=sb is None)
+                                         trail=not structure.usable(sb))
                 if usd is not None and manage.is_better_stop(t["side"], new_stop, usd):
                     new_stop = usd
                 if manage.is_better_stop(t["side"], t["stop"], new_stop):

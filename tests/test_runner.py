@@ -91,3 +91,23 @@ def test_bot_own_tickets_are_not_touched_by_manual_manager():
 
 def test_normalize_unreadable_returns_none():
     assert normalize({"foo": 1}) is None
+
+
+def test_trail_continues_by_dollars_when_structure_bars_are_too_few():
+    """الخلل الحقيقي: شموع هيكل موجودة لكن <25 فكان الوقف يتحرك مرة واحدة فقط (دخول+1$) ثم يتجمّد."""
+    ex = MEx()
+    ex.structure_bars = lambda sym=None: [(101.0, 99.0, 100.0)] * 10     # قليلة: لا تكفي للتحليل
+    j = Journal(tempfile.mkdtemp())
+    m = ManualManager(ex, j)
+    m.tick(set(), 1)
+    ex.bars = ([(106.0, 99.0)], 2, 105.0)            # ربح 6$: تأمين الدخول +1$
+    m.tick(set(), 2)
+    assert ex.mods[-1] == (7, 101.0)
+    ex.pos[0]["stopLoss"] = 101.0
+    ex.bars = ([(128.0, 104.0)], 3, 127.0)           # ربح 28$: يجب أن يلحق الوقف 5$ خلف القمة
+    m.tick(set(), 3)
+    assert ex.mods[-1] == (7, 123.0)
+    ex.pos[0]["stopLoss"] = 123.0
+    ex.bars = ([(127.0, 110.0)], 4, 111.0)           # نزل السعر: لا يتراجع الوقف
+    m.tick(set(), 4)
+    assert ex.mods[-1] == (7, 123.0)

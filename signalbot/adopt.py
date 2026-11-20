@@ -3,7 +3,7 @@
 القاعدة بالدولار (لكل 0.01 لوت، وتتناسب مع الحجم): عند ربح 5$ يُؤمَّن الدخول +1$، وعند 10$ يلحق الوقف السعر
 على بُعد 5$ من أعلى ربح. لا يرجع الوقف أبداً، ولا نغلق يدوياً، ولا نمس الهدف. مركز بلا وقف يُسجَّل ويُترك.
 """
-from . import manage
+from . import manage, structure
 
 
 def _pick(d, *keys):
@@ -70,8 +70,9 @@ class ManualManager:
             except Exception as e:
                 self.j.event("error", where="adopt_structure", error=str(e))
         smart, state = manage.smart_stop(pos["side"], st["entry"], st["best"], upp, lots, sb)
-        st["market"] = state
-        base = manage.dollar_stop(pos["side"], st["entry"], st["best"], upp, lots, trail=sb is None)
+        ok = structure.usable(sb)
+        st["market"] = state or (None if ok else f"dollar(bars={len(sb or [])})")
+        base = manage.dollar_stop(pos["side"], st["entry"], st["best"], upp, lots, trail=not ok)
         if smart is not None and (base is None or manage.is_better_stop(pos["side"], base, smart)):
             return smart
         return base

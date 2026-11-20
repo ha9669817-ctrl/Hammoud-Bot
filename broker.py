@@ -289,7 +289,7 @@ class SignalExecutor:
         """كم دولار يربح/يخسر المركز لكل 1.0 حركة في السعر."""
         return _risk_per_lot(self._spec(symbol), 1.0) * float(lots)
 
-    def structure_bars(self, symbol=None, tf="M5", count=60):
+    def structure_bars(self, symbol=None, tf="M5", count=80):
         """(high, low, close) لآخر شموع M5 (الأقدم أولاً، والأخيرة جارية). ذاكرة 15 ثانية لتخفيف الطلبات."""
         symbol = symbol or self.symbol
         cache = self.__dict__.setdefault("_struct_cache", {})
@@ -297,7 +297,7 @@ class SignalExecutor:
         if hit and time.time() - hit[0] < 15:
             return hit[1]
         now = datetime.now(timezone.utc)
-        mins = count * 5 + 5
+        mins = count * 5 * 3 + 30   # نافذة أوسع: الوسيط قد يعيد أقل من count (إغلاقات/ثغرات)
         data = self.client._acct("GET", "/candles", params={
             "symbol": symbol, "timeframe": tf, "count": count,
             "from": (now - timedelta(minutes=mins)).isoformat(), "to": now.isoformat()})
