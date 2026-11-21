@@ -13,7 +13,7 @@ from signalbot.adopt import ManualManager
 from signalbot.engine import Journal, SignalBot
 from signalbot.parser import parse_signal
 from signalbot.runner import Runner
-from strategy.live import Analyst
+from strategy.live import DEFAULT_SYMBOLS, Analyst
 from persist import Persist
 from store import Store
 from telegram_ingest import TelegramIngest, parse_channels
@@ -87,7 +87,7 @@ def boot():
             executor = SignalExecutor(store)
             SB["stage"] = "إنشاء البوت"
             bot = SignalBot(Journal(DATA_DIR / "signalbot"), executor, CHANNELS.values(), is_enabled=is_on)
-            analyst = Analyst(executor, bot.j, is_on, analyst_on, symbol=os.getenv("ANALYST_SYMBOL", ""),
+            analyst = Analyst(executor, bot.j, is_on, analyst_on, symbol=os.getenv("ANALYST_SYMBOLS") or os.getenv("ANALYST_SYMBOL") or DEFAULT_SYMBOLS,
                                   strategy=os.getenv("ANALYST_STRATEGY", "ema_cross"), tf=os.getenv("ANALYST_TF", "1h"))
             SB["analyst"] = analyst
             runner = Runner(bot, executor, ManualManager(executor, bot.j), analyst)

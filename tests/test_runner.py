@@ -139,3 +139,20 @@ def test_trade_that_ran_28_dollars_is_not_stopped_at_plus_one():
     ex.pos[0]["stopLoss"] = ex.mods[-1][1]
     ex.bars = ([(128.0, 104.0)], 3, 127.0); m.tick(set(), 3)
     assert ex.mods[-1][1] >= 100.0 + 0.6 * 28 - 1e-9                          # ≥ +16.8$ لا +1$
+
+
+def test_non_gold_positions_trail_by_r_ladder_not_gold_dollars():
+    """رمز غير الذهب (EURUSD مثلاً): لا يُطبَّق 5$/10$ بل سُلّم R، ويتحرك الوقف مع الربح ولا يتراجع."""
+    ex = MEx()
+    ex.pos[0]["symbol"] = "EURUSDm"
+    ex.pos[0]["stopLoss"] = 95.0                       # R = 5
+    ex.pos[0]["openPrice"] = 100.0
+    m = ManualManager(ex, Journal(tempfile.mkdtemp()))
+    m.tick(set(), 1)
+    ex.bars = ([(106.0, 99.0)], 2, 105.0); m.tick(set(), 2)     # +1.2R: تأمين +0.1R
+    assert ex.mods[-1] == (7, 100.5)
+    ex.pos[0]["stopLoss"] = 100.5
+    ex.bars = ([(116.0, 104.0)], 3, 115.0); m.tick(set(), 3)    # +3.2R: تأمين 2R
+    assert ex.mods[-1] == (7, 110.0)
+    ex.bars = ([(112.0, 104.0)], 4, 105.0); m.tick(set(), 4)    # تراجع: لا رجوع للوقف
+    assert ex.mods[-1] == (7, 110.0)

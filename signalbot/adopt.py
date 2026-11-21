@@ -53,7 +53,16 @@ class ManualManager:
         self.state = journal.load_state().get("adopt", {})   # ticket -> {sl0, best, stop, since, ...}
         self.warned = set()
 
+    @staticmethod
+    def _is_gold(symbol):
+        return any(k in str(symbol or "").upper() for k in ("XAU", "GOLD"))
+
     def _dollar_target(self, pos, st):
+        if not self._is_gold(pos["symbol"]):
+            # أي رمز غير الذهب (يورو، ين، مؤشرات...): قاعدة الدولار مصمّمة للذهب، فنستعمل سُلّم R:
+            # بعد 1R تأمين الدخول +0.1R، وبعد kR تأمين (k-1)R (نفس ما اختُبر تاريخياً). لا نمسّ الهدف.
+            st["market"] = "R-ladder"
+            return target_stop(pos["side"], st["entry"], st["sl0"], st["best"])
         try:
             lots = float(pos["lots"])
             upp = self.ex.usd_per_price(pos["symbol"], lots)

@@ -24,7 +24,8 @@ def _frame(rows):
     return df[~df.index.duplicated()]
 
 
-class Analyst:
+class _Run:
+    """متابعة رمز واحد: قراره وتذكرته وهدوءه مستقلة عن بقية الرموز."""
     def __init__(self, executor, journal, is_enabled, own_on=lambda: True, now=time.time, symbol="", strategy="ema_cross", tf="1h"):
         self.ex, self.j, self.is_enabled, self.own_on, self.now = executor, journal, is_enabled, own_on, now
         self.symbol = (symbol or "").strip()
@@ -130,3 +131,35 @@ class Analyst:
                           decision=f"دخل {side} عند ~{price:.2f} وقف {sl:.2f}")
         self.j.event("analyst_entry", ticket=self.ticket, symbol=self.symbol, side=side, price=price, sl=sl,
                      trend=tr, atr=round(float(r["atr"]), 2))
+
+
+DEFAULT_SYMBOLS = "EURUSDm,USDJPYm,USTECm,US30m"      # الذهب خارجها عمداً
+
+
+class Analyst:
+    """يشغّل _Run لكل رمز (بالتوازي، صفقة واحدة كحد أقصى لكل رمز). تُدار وقفوف صفقاته من ManualManager."""
+
+    def __init__(self, executor, journal, is_enabled, own_on=lambda: True, now=time.time, symbol=DEFAULT_SYMBOLS,
+                 strategy="ema_cross", tf="1h"):
+        syms = [x.strip() for x in str(symbol or "").replace(";", ",").split(",") if x.strip()]
+        self.runs = [_Run(executor, journal, is_enabled, own_on, now, s, strategy, tf) for s in syms]
+        self.strategy = self.runs[0].strategy if self.runs else strategy
+        self.state = {"running": False, "error": None, "last_check": None, "decision": "لم يُحدَّد رمز (ANALYST_SYMBOLS)",
+                      "entries": 0, "symbols": {}, "strategy": self.runs[0].state["strategy"] if self.runs else strategy}
+
+    @property
+    def tickets(self):
+        return {str(r.ticket) for r in self.runs if r.ticket is not None}
+
+    def tick(self):
+        for r in self.runs:
+            r.tick()
+        st = [r.state for r in self.runs]
+        errs = [f"{r.symbol}: {r.state['error']}" for r in self.runs if r.state.get("error")]
+        self.state.update(
+            running=any(x.get("running") for x in st), error="؛ ".join(errs) or None,
+            entries=sum(x.get("entries", 0) for x in st),
+            last_check=max([x.get("last_check") or "" for x in st] or [""]) or None,
+            decision="؛ ".join(f"{r.symbol}: {r.state.get('decision')}" for r in self.runs) or self.state["decision"],
+            symbols={r.symbol: {"decision": r.state.get("decision"), "ticket": r.ticket, "entries": r.state.get("entries", 0)}
+                     for r in self.runs})

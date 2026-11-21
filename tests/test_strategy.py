@@ -114,7 +114,7 @@ def test_ema_cross_buys_only_above_ema200_and_sells_only_below_with_2r_target():
     assert seen["buy"] and seen["sell"]
 
 
-def test_ema_cross_analyst_places_sl_and_tp_and_is_excluded_from_gold_manager():
+def test_ema_cross_analyst_places_sl_and_tp():
     full = _market(0.03, n=5200, seed=1)
     h1 = ind.resample(full, "1h")
     from strategy import ema_cross
@@ -124,4 +124,25 @@ def test_ema_cross_analyst_places_sl_and_tp_and_is_excluded_from_gold_manager():
     ex.candle_rows = lambda tf, n, symbol=None: [(t.timestamp(), r.open, r.high, r.low, r.close) for t, r in h1.iloc[: idx + 2].tail(n).iterrows()]
     a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda: True, lambda: True, now=lambda: 1000.0, symbol="EURUSDm", strategy="ema_cross")
     a.tick()
-    assert len(ex.placed) == 1 and ex.placed[0][2] is not None and a.ticket == 7
+    assert len(ex.placed) == 1 and ex.placed[0][2] is not None and a.tickets == {"7"}
+
+
+def test_analyst_runs_all_symbols_independently_and_skips_gold():
+    full = _market(0.03, n=5200, seed=1)
+    h1 = ind.resample(full, "1h")
+    from strategy import ema_cross
+    idx = next(i for i in range(215, len(h1) - 1) if ema_cross.decide(h1, i))
+    placed = []
+
+    class MEx(Ex):
+        def open_tickets_for(self, s): return {t: "open" for sy, t in placed if sy == s}
+        def place_for(self, symbol, side, sl, tp=None):
+            placed.append((symbol, 100 + len(placed))); return 100 + len(placed) - 1
+        price_digits = lambda self, s: 5
+        candle_rows = lambda self, tf, n, symbol=None: [(t.timestamp(), r.open, r.high, r.low, r.close) for t, r in h1.iloc[: idx + 2].tail(n).iterrows()]
+
+    a = Analyst(MEx(full), Journal(tempfile.mkdtemp()), lambda: True, lambda: True, now=lambda: 1000.0,
+                symbol="EURUSDm,USDJPYm,USTECm,US30m,XAUUSDm")
+    a.tick()
+    assert sorted(s for s, _ in placed) == ["EURUSDm", "US30m", "USDJPYm", "USTECm"]   # كلها دخلت مرة، والذهب لا
+    assert "ممنوع" in a.state["error"] and len(a.tickets) == 4

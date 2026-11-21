@@ -173,7 +173,8 @@ async function refresh(){
     chips.push([ps.enabled===false?"off":ps.error?"off":ps.last_sync?"on":"wait","التخزين الدائم: "+(ps.enabled===false?(ps.error||"معطّل"):ps.error?ps.error:ps.last_sync?"محفوظ على GitHub":"بانتظار أول حفظ")]);
     const an=s.analyst||{},tr=an.trend||{},arr=v=>v==null?"؟":v>0?"↑":v<0?"↓":"•";
     const ab=$("achips");ab.replaceChildren();
-    [[an.on?(an.error?"off":an.running?"on":"wait"):"off","المحلّل: "+(an.on?(an.error?"خطأ "+an.error:an.decision||"—"):"متوقف")],
+    [[an.on?(an.error?"off":an.running?"on":"wait"):"off","المحلّل: "+(an.on?(an.error?"خطأ "+an.error:an.symbols&&Object.keys(an.symbols).length?"يعمل على "+Object.keys(an.symbols).length+" رموز":an.decision||"—"):"متوقف")],
+     ...Object.entries(an.symbols||{}).map(([k,v])=>[v.ticket?"on":"wait",k+": "+(v.decision||"—")]),
      ["wait","الاتجاه H4 "+arr(tr.h4)+" · H1 "+arr(tr.h1)+" · M15 "+arr(tr.m15)+" · ADX "+(tr.adx==null?"؟":tr.adx)],
      ["wait",(an.strategy||"")+" · دخل "+(an.entries||0)+" مرة"+(an.last_check?" · آخر فحص "+an.last_check+" UTC":"")]].forEach(([st,tx],i)=>{const c=el("span",undefined,"chip");c.append(el("span","","dot "+st),document.createTextNode(tx));ab.append(c)});
     const box=$("chips");box.replaceChildren();
