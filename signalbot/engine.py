@@ -60,6 +60,12 @@ class Journal:
         (self.dir / "state.json").write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
 
 
+def _closed_error(e) -> bool:
+    """رفض الوسيط للتعديل لأن المركز أُغلق أصلاً (retcode 10036)."""
+    m = str(e)
+    return "POSITION_CLOSED" in m or "10036" in m
+
+
 class SignalBot:
     def __init__(self, journal: Journal, executor, channels, is_enabled=lambda: True):
         self.j, self.ex, self.channels = journal, executor, set(channels)
@@ -165,7 +171,7 @@ class SignalBot:
                 self._check_waiting(tk, t, bars)
                 continue
             ticket = t["ticket"]
-            if (live.get(ticket) or live.get(str(ticket))) is None:
+            if t.get("closed_hint") or (live.get(ticket) or live.get(str(ticket))) is None:
                 self._finish_if_closed(tk, t)  # إن لم يظهر سجل الإغلاق ننتظر الدورة التالية
                 continue
             sb = self._structure_bars()
@@ -183,7 +189,10 @@ class SignalBot:
                     try:
                         self.ex.modify_sl(ticket, new_stop)
                     except Exception as e:
-                        self.j.event("error", where="modify_sl", ticket=ticket, error=str(e))
+                        if _closed_error(e):
+                            t["closed_hint"] = True      # الوسيط يقول مُغلق: ننتقل لتسجيل الإغلاق بدل إعادة المحاولة كل دورة
+                        else:
+                            self.j.event("error", where="modify_sl", ticket=ticket, error=str(e))
                         break  # لا نتقدّم في المستوى إن فشل التعديل: نعيد المحاولة بالدورة التالية
                     self.j.event("trail", ticket=ticket, old=t["stop"], new=new_stop, level=lvl, side=t["side"], channel=t["channel"])
                     t["stop"] = new_stop
@@ -215,7 +224,10 @@ class SignalBot:
         try:
             self.ex.modify_sl(t["ticket"], new)
         except Exception as e:
-            self.j.event("error", where="smart_modify", ticket=t["ticket"], error=str(e))
+            if _closed_error(e):
+                t["closed_hint"] = True
+            else:
+                self.j.event("error", where="smart_modify", ticket=t["ticket"], error=str(e))
             return
         self.j.event("trail", ticket=t["ticket"], old=t["stop"], new=new, state=state, side=t["side"], channel=t["channel"])
         t["stop"] = new

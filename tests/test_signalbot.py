@@ -167,6 +167,24 @@ def test_modify_failure_is_retried_next_tick():
     assert ex.modified and t["level"] == 1
 
 
+def test_position_closed_rejection_stops_retrying_and_releases_trade(monkeypatch):
+    """الوسيط يرد POSITION_CLOSED بينما قائمة المراكز ما زالت تعرضه: لا إعادة محاولة كل دورة ولا ضجيج أخطاء."""
+    from signalbot import engine
+    monkeypatch.setattr(engine, "ORPHAN_AFTER_S", 0)
+    bot, ex, _ = make()
+    bot.on_message("A", 1, STRUCT, 4040)
+
+    def boom(ticket, sl):
+        raise RuntimeError("422 BROKER_REJECTED Broker rejected the modify: POSITION_CLOSED (retcode 10036)")
+    ex.modify_sl = boom
+    ex.profit = None
+    stale = dict(ex.live)                                   # القائمة المتأخرة ما زالت تعرض المركز
+    for _ in range(4):
+        bot.tick([(4054, 4041)], stale)
+    errs = [e for e in bot.j.read("events.jsonl") if e.get("event") == "error"]
+    assert not errs and not bot.trades                       # لا أخطاء متكررة، وحُرّر المكان
+
+
 def test_losing_channel_gets_paused_and_state_survives_restart():
     bot, ex, d = make()
     for i in range(8):

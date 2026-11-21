@@ -121,7 +121,8 @@ class ManualManager:
             try:
                 self.ex.modify_sl(pos["ticket"], new)
             except Exception as e:
-                self.j.event("error", where="adopt_modify", ticket=pos["ticket"], error=str(e))
+                if "POSITION_CLOSED" not in str(e) and "10036" not in str(e):   # مُغلق أصلاً: لا ضجيج
+                    self.j.event("error", where="adopt_modify", ticket=pos["ticket"], error=str(e))
                 continue
             self.j.event("trail", ticket=pos["ticket"], old=st["stop"], new=new, manual=True, state=st.get("market"), side=pos["side"])
             st["stop"] = new
