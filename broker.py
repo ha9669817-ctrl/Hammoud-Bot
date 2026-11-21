@@ -280,6 +280,12 @@ class SignalExecutor:
         step = float(spec.get("volumeStep") or spec.get("volume_step") or 0.01)
         return float(spec.get("volumeMin") or spec.get("volume_min") or step)
 
+    def price_digits(self, symbol):
+        try:
+            return int(self._spec(symbol).get("digits") or 5)
+        except Exception:
+            return 5
+
     def place_for(self, symbol, side, sl, tp=None):
         """دخول سوق على رمز محدّد بأصغر لوت له (للمحلّل: رمز غير الذهب)."""
         res = self.client.open_market(symbol, side, self.min_lot(symbol), sl, tp)

@@ -62,7 +62,7 @@ def test_analyst_enters_once_with_trend_and_no_tp():
     i, dec = _first_signal(full)
     m5 = full.iloc[: i + 2]                       # الشمعة i مكتملة وبعدها جارية
     ex = Ex(m5)
-    a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda: True, lambda: True, now=lambda: 1000.0, symbol="EURUSDm")
+    a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda: True, lambda: True, now=lambda: 1000.0, symbol="EURUSDm", strategy="breakout")
     a.tick()
     assert len(ex.placed) == 1 and ex.placed[0][0] == "buy" and ex.placed[0][2] is None and ex.placed[0][1] < m5["close"].iloc[-1]
     a._last_run = 0; a.now = lambda: 1100.0
@@ -92,3 +92,36 @@ def test_analyst_refuses_gold_and_does_nothing_without_symbol():
         a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda: True, lambda: True, now=lambda: 500.0, symbol=sym)
         a.tick()
         assert not ex.placed
+
+
+def test_ema_cross_buys_only_above_ema200_and_sells_only_below_with_2r_target():
+    from strategy import ema_cross
+    seen = {"buy": 0, "sell": 0}
+    for seed in range(3):
+        for drift in (0.03, -0.03):
+            m5 = _market(drift, n=7000, seed=seed)
+            h1 = ind.resample(m5, "1h")
+            e200 = ind.ema(h1.close, 200)
+            for i in range(205, len(h1) - 1):
+                dec = ema_cross.decide(h1, i)
+                if not dec:
+                    continue
+                side, sl, tp, ref = dec
+                assert (side == "buy") == (h1.close.iloc[i] > e200.iloc[i])          # لا دخول ضد EMA200
+                assert (side == "buy" and sl < ref < tp) or (side == "sell" and tp < ref < sl)
+                assert abs(abs(tp - ref) - 2 * abs(ref - sl)) < 1e-6                 # هدف 1:2 تماماً
+                seen[side] += 1
+    assert seen["buy"] and seen["sell"]
+
+
+def test_ema_cross_analyst_places_sl_and_tp_and_is_excluded_from_gold_manager():
+    full = _market(0.03, n=5200, seed=1)
+    h1 = ind.resample(full, "1h")
+    from strategy import ema_cross
+    idx = next(i for i in range(215, len(h1) - 1) if ema_cross.decide(h1, i))
+    ex = Ex(full)
+    ex.price_digits = lambda s: 5
+    ex.candle_rows = lambda tf, n, symbol=None: [(t.timestamp(), r.open, r.high, r.low, r.close) for t, r in h1.iloc[: idx + 2].tail(n).iterrows()]
+    a = Analyst(ex, Journal(tempfile.mkdtemp()), lambda: True, lambda: True, now=lambda: 1000.0, symbol="EURUSDm", strategy="ema_cross")
+    a.tick()
+    assert len(ex.placed) == 1 and ex.placed[0][2] is not None and a.ticket == 7

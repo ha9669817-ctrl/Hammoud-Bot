@@ -87,7 +87,8 @@ def boot():
             executor = SignalExecutor(store)
             SB["stage"] = "إنشاء البوت"
             bot = SignalBot(Journal(DATA_DIR / "signalbot"), executor, CHANNELS.values(), is_enabled=is_on)
-            analyst = Analyst(executor, bot.j, is_on, analyst_on, symbol=os.getenv("ANALYST_SYMBOL", ""))
+            analyst = Analyst(executor, bot.j, is_on, analyst_on, symbol=os.getenv("ANALYST_SYMBOL", ""),
+                                  strategy=os.getenv("ANALYST_STRATEGY", "ema_cross"), tf=os.getenv("ANALYST_TF", "1h"))
             SB["analyst"] = analyst
             runner = Runner(bot, executor, ManualManager(executor, bot.j), analyst)
             runner.start()

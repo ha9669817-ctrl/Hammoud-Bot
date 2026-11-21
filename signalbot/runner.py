@@ -49,6 +49,8 @@ class Runner:
         self.bot.tick(bars, live, self.price)
         if self.manual is not None and self.bot.is_enabled():
             own = {str(t["ticket"]) for t in self.bot.trades.values() if t.get("ticket") is not None}
+            if self.analyst is not None and self.analyst.ticket is not None:
+                own.add(str(self.analyst.ticket))   # وقف/هدف المحلّل ثابتان كما في وصف استراتيجيته: لا تمسّهما إدارة الذهب
             self.manual.tick(own, time.time())
         if self.analyst is not None:
             self.analyst.tick()      # معزول: أخطاؤه تُسجَّل داخله ولا توقف الدورة

@@ -75,7 +75,7 @@ pre{white-space:pre-wrap;margin:0;font:13px/1.6 ui-monospace,monospace}
 <div class="card"><div class="row"><h2 class="grow">المحلّل (فريمات متعددة، باتجاه السوق فقط)</h2>
   <button id="aOn" class="sec">تشغيل</button><button id="aOff" class="off">إيقاف</button></div>
   <div class="chips" id="achips"></div>
-  <div class="mut" style="margin-top:6px">يدخل فقط حين يتفق اتجاه H4 وH1 وM15 ويحدث اختراق قمة/قاع 4 ساعات مع ADX≥20، بأصغر لوت ووقف 3×ATR، ثم يُدار وقفه تلقائياً. اختباره التاريخي إيجابي لكنه ليس ضمان ربح.</div>
+  <div class="mut" style="margin-top:6px">الاستراتيجية الافتراضية (ema_cross): السعر فوق/تحت EMA200 + تقاطع EMA9/21 عند إغلاق الشمعة، الوقف عند أقرب قاع/قمة، الهدف 1:2، بأصغر لوت. مطفأة افتراضياً ولا تعمل على الذهب. اختبارها التاريخي ضعيف، فهي للتجربة الحيّة على التجريبي فقط.</div>
 </div>
 
 <div class="card"><h2>صفقات حالية</h2><table><tbody id="open"></tbody></table></div>
@@ -175,7 +175,7 @@ async function refresh(){
     const ab=$("achips");ab.replaceChildren();
     [[an.on?(an.error?"off":an.running?"on":"wait"):"off","المحلّل: "+(an.on?(an.error?"خطأ "+an.error:an.decision||"—"):"متوقف")],
      ["wait","الاتجاه H4 "+arr(tr.h4)+" · H1 "+arr(tr.h1)+" · M15 "+arr(tr.m15)+" · ADX "+(tr.adx==null?"؟":tr.adx)],
-     ["wait","دخل "+(an.entries||0)+" مرة"+(an.last_check?" · آخر فحص "+an.last_check+" UTC":"")]].forEach(([st,tx],i)=>{const c=el("span",undefined,"chip");c.append(el("span","","dot "+st),document.createTextNode(tx));ab.append(c)});
+     ["wait",(an.strategy||"")+" · دخل "+(an.entries||0)+" مرة"+(an.last_check?" · آخر فحص "+an.last_check+" UTC":"")]].forEach(([st,tx],i)=>{const c=el("span",undefined,"chip");c.append(el("span","","dot "+st),document.createTextNode(tx));ab.append(c)});
     const box=$("chips");box.replaceChildren();
     chips.forEach(([st,tx],i)=>{const c=el("span",undefined,"chip");c.style.animationDelay=(i*0.08)+"s";c.append(el("span","","dot "+st),document.createTextNode(tx));box.append(c)});
     const ch=$("mch");if(!ch.options.length)s.channels.forEach(c=>ch.append(new Option(c,c)));
